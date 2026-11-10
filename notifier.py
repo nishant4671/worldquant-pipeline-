@@ -103,6 +103,23 @@ def send_digest(limit: int | None = None, db_path: Path | str | None = None) -> 
     return message_ids
 
 
+def send_alert(message: str) -> None:
+    """Send an urgent alert message to Telegram. Catches all exceptions quietly.
+
+    Args:
+        message: Alert description text.
+    """
+    base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": f"🚨 ALERT: {message}",
+    }
+    try:
+        requests.post(f"{base_url}/sendMessage", json=payload, timeout=10)
+    except Exception as e:
+        log.warning("Failed to dispatch Telegram alert: %s", e)
+
+
 def poll_actions(timeout_seconds: int = 600, db_path: Path | str | None = None) -> None:
     """Poll for Telegram callback queries and process user button interactions.
 

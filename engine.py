@@ -8,10 +8,12 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 import json
 import logging
 from pathlib import Path
 import tempfile
+import threading
 import time
 from typing import Any
 import requests
@@ -20,8 +22,76 @@ from api_client import BrainApiError, BrainClient
 from config import settings
 import database
 from generator import generate_expressions
+import notifier
 
 log = logging.getLogger(__name__)
+
+
+class BreakerState(Enum):
+    """Circuit breaker operational states."""
+
+    CLOSED = "CLOSED"
+    OPEN = "OPEN"
+    HALF_OPEN = "HALF_OPEN"
+
+
+class CircuitBreaker:
+    """Kill switch circuit breaker to halt requests on consecutive 429 rate limit errors."""
+
+    def __init__(self, failure_threshold: int = 3, cooldown_seconds: float = 300) -> None:
+        """Initialize circuit breaker.
+
+        Args:
+            failure_threshold: Number of consecutive 429 failures before tripping (default 3).
+            cooldown_seconds: Cooldown duration in seconds before HALF_OPEN retry (default 300).
+        """
+        self.failure_threshold = failure_threshold
+        self.cooldown_seconds = cooldown_seconds
+        self.state = BreakerState.CLOSED
+        self.consecutive_failures = 0
+        self.last_failure_time: float = 0.0
+        self._lock = threading.Lock()
+
+    def record_failure(self, status: int = 429) -> None:
+        """Record a failure event. Trips breaker to OPEN on threshold 429 responses.
+
+        Args:
+            status: HTTP status code of failure (default 429).
+        """
+        if status != 429:
+            return
+        with self._lock:
+            self.consecutive_failures += 1
+            self.last_failure_time = time.time()
+            if self.consecutive_failures >= self.failure_threshold:
+                self.state = BreakerState.OPEN
+                log.critical(
+                    "Circuit breaker tripped: %d consecutive 429s. Halting pipeline.",
+                    self.consecutive_failures,
+                )
+                notifier.send_alert(
+                    f"CIRCUIT BREAKER TRIPPED: {self.failure_threshold} consecutive 429s. Halting pipeline."
+                )
+
+    def record_success(self) -> None:
+        """Reset consecutive failures and restore state to CLOSED."""
+        with self._lock:
+            self.consecutive_failures = 0
+            self.state = BreakerState.CLOSED
+
+    def check_state(self) -> None:
+        """Verify breaker state before making requests.
+
+        Raises:
+            BrainApiError: If circuit breaker is OPEN and cooldown has not elapsed.
+        """
+        with self._lock:
+            if self.state == BreakerState.OPEN:
+                if time.time() - self.last_failure_time > self.cooldown_seconds:
+                    self.state = BreakerState.HALF_OPEN
+                    log.info("Circuit breaker cooldown elapsed. State -> HALF_OPEN")
+                else:
+                    raise BrainApiError(429, "Circuit breaker OPEN. Pipeline halted.")
 
 
 @dataclass
@@ -46,6 +116,7 @@ class AlphaEngine:
         poll_interval: float | None = None,
         poll_timeout: float | None = None,
         db_path: Path | str | None = None,
+        breaker: CircuitBreaker | None = None,
     ) -> None:
         """Initialize engine with BrainClient and concurrency parameters.
 
@@ -55,6 +126,7 @@ class AlphaEngine:
             poll_interval: Polling interval in seconds (default from settings).
             poll_timeout: Max polling timeout in seconds (default from settings).
             db_path: Optional path to SQLite database. If None, uses default.
+            breaker: Optional CircuitBreaker instance. If None, creates a default one.
         """
         self.client = client
         self.max_workers = max_workers
@@ -69,6 +141,7 @@ class AlphaEngine:
             else getattr(settings, "poll_timeout_seconds", 1800)
         )
         self.db_path = db_path
+        self.breaker = breaker or CircuitBreaker()
         # Initialize database schema once at the start
         database.init_db(self.db_path)
 
@@ -94,7 +167,9 @@ class AlphaEngine:
                 error="Duplicate expression",
             )
 
+        alpha_id: str | None = None
         try:
+            self.breaker.check_state()
             payload = {
                 "type": "REGULAR",
                 "settings": {
@@ -124,7 +199,6 @@ class AlphaEngine:
 
             # Polling loop
             start_time = time.monotonic()
-            alpha_id: str | None = None
 
             while True:
                 if time.monotonic() - start_time > self.poll_timeout:
@@ -138,6 +212,7 @@ class AlphaEngine:
                     )
 
                 try:
+                    self.breaker.check_state()
                     poll_resp = self.client.request("GET", location)
                     poll_data = poll_resp.json()
                 except BrainApiError as api_err:
@@ -187,6 +262,7 @@ class AlphaEngine:
                 )
 
             # Fetch metrics from /alphas/{alpha_id}
+            self.breaker.check_state()
             alpha_resp = self.client.request("GET", f"/alphas/{alpha_id}")
             alpha_data = alpha_resp.json()
             is_metrics = alpha_data.get("is")
@@ -242,6 +318,7 @@ class AlphaEngine:
                 except Exception as db_err:
                     log.exception("Failed to insert alpha %s into database: %s", alpha_id, db_err)
 
+            self.breaker.record_success()
             return SimulationResult(
                 expression=expr,
                 category=category,
@@ -251,12 +328,24 @@ class AlphaEngine:
                 error=None,
             )
 
+        except BrainApiError as api_err:
+            if api_err.status == 429 and "Circuit breaker OPEN" not in str(api_err):
+                self.breaker.record_failure(429)
+            log.exception("Simulation error for %s (%s): %s", expr, category, api_err)
+            return SimulationResult(
+                expression=expr,
+                category=category,
+                alpha_id=alpha_id,
+                status="error",
+                metrics=None,
+                error=str(api_err),
+            )
         except Exception as e:
             log.exception("Simulation error for %s (%s): %s", expr, category, e)
             return SimulationResult(
                 expression=expr,
                 category=category,
-                alpha_id=None,
+                alpha_id=alpha_id,
                 status="error",
                 metrics=None,
                 error=str(e),

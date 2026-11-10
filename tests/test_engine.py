@@ -10,7 +10,7 @@ import requests
 from api_client import BrainApiError, BrainClient
 import config
 import database
-from engine import AlphaEngine, SimulationResult
+from engine import AlphaEngine, BreakerState, CircuitBreaker, SimulationResult
 
 
 def _make_mock_client_for_metrics(mocker, metrics, progress=1.0, alpha_id="A123"):
@@ -356,5 +356,90 @@ def test_polling_survives_500(mocker, tmp_path):
     assert result.status == "passed"
     assert result.alpha_id == "alpha-survived-500"
     assert poll_call_count == 4
+
+
+def test_circuit_breaker_trips_on_three_429s(mocker):
+    """Assert circuit breaker trips to OPEN after 3 consecutive 429 failures and sends alert."""
+    mock_alert = mocker.patch("notifier.send_alert")
+    cb = CircuitBreaker(failure_threshold=3, cooldown_seconds=300)
+    assert cb.state == BreakerState.CLOSED
+
+    cb.record_failure(429)
+    assert cb.state == BreakerState.CLOSED
+    assert cb.consecutive_failures == 1
+    mock_alert.assert_not_called()
+
+    cb.record_failure(429)
+    assert cb.state == BreakerState.CLOSED
+    assert cb.consecutive_failures == 2
+    mock_alert.assert_not_called()
+
+    cb.record_failure(429)
+    assert cb.state == BreakerState.OPEN
+    assert cb.consecutive_failures == 3
+    mock_alert.assert_called_once_with(
+        "CIRCUIT BREAKER TRIPPED: 3 consecutive 429s. Halting pipeline."
+    )
+
+    with pytest.raises(BrainApiError) as exc_info:
+        cb.check_state()
+    assert exc_info.value.status == 429
+    assert "Circuit breaker OPEN" in str(exc_info.value)
+
+
+def test_circuit_breaker_cooldown(mocker):
+    """Assert circuit breaker transitions to HALF_OPEN after cooldown period elapses."""
+    cb = CircuitBreaker(failure_threshold=3, cooldown_seconds=300)
+    now = 1770000000.0
+    mocker.patch("time.time", return_value=now)
+    cb.record_failure(429)
+    cb.record_failure(429)
+    cb.record_failure(429)
+    assert cb.state == BreakerState.OPEN
+    assert cb.last_failure_time == now
+
+    # Cooldown not elapsed (e.g. 100s later)
+    mocker.patch("time.time", return_value=now + 100)
+    with pytest.raises(BrainApiError) as exc_info:
+        cb.check_state()
+    assert exc_info.value.status == 429
+    assert cb.state == BreakerState.OPEN
+
+    # Cooldown elapsed (301s later)
+    mocker.patch("time.time", return_value=now + 301)
+    cb.check_state()
+    assert cb.state == BreakerState.HALF_OPEN
+
+
+def test_circuit_breaker_record_success():
+    """Assert record_success resets failures and sets state to CLOSED."""
+    cb = CircuitBreaker(failure_threshold=3, cooldown_seconds=300)
+    cb.consecutive_failures = 2
+    cb.state = BreakerState.HALF_OPEN
+    cb.record_success()
+    assert cb.consecutive_failures == 0
+    assert cb.state == BreakerState.CLOSED
+
+
+def test_engine_trips_circuit_breaker(mocker, tmp_path):
+    """Assert AlphaEngine records 429 failures and trips breaker."""
+    db_file = tmp_path / "test_engine_breaker.db"
+    mocker.patch("notifier.send_alert")
+    mock_client = mocker.MagicMock(spec=BrainClient)
+    mock_client.request.side_effect = BrainApiError(429, "Too Many Requests")
+
+    engine = AlphaEngine(client=mock_client, db_path=db_file)
+    for i in range(3):
+        res = engine._simulate_one(f"expr_{i}", "price_volume")
+        assert res.status == "error"
+
+    assert engine.breaker.state == BreakerState.OPEN
+    # Next call should be blocked by open breaker without calling request
+    req_count = mock_client.request.call_count
+    res_blocked = engine._simulate_one("expr_blocked", "price_volume")
+    assert res_blocked.status == "error"
+    assert "Circuit breaker OPEN" in str(res_blocked.error)
+    assert mock_client.request.call_count == req_count
+
 
 
