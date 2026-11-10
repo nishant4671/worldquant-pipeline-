@@ -17,6 +17,17 @@ import config
 
 log = logging.getLogger(__name__)
 
+DEFAULT_OPERATORS: list[str] = [
+    "rank",
+    "ts_rank",
+    "ts_delta",
+    "ts_mean",
+    "ts_zscore",
+    "ts_decay_linear",
+    "group_neutralize",
+    "trade_when",
+]
+
 
 def _strip_markdown_code_block(text: str) -> str:
     """Robustly strip markdown code fences and backticks from response text."""
@@ -162,25 +173,31 @@ class LLMClient:
     def generate_alphas(
         self,
         known_fields: dict[str, list[str]],
-        operators: list[str],
+        operators: list[str] = DEFAULT_OPERATORS,
         num_alphas: int = 5,
     ) -> list[str]:
         """Propose Fast Expression alphas constrained to known fields and operators.
 
         Args:
             known_fields: Dictionary of verified fields by category.
-            operators: List of allowed mathematical/time-series operators.
+            operators: List of allowed mathematical/time-series operators. Defaults
+                to DEFAULT_OPERATORS including advanced operators.
             num_alphas: Number of alpha expressions to request (default 5).
 
         Returns:
             list[str]: Generated alpha expression strings.
         """
+        if operators is None:
+            operators = DEFAULT_OPERATORS
+
         system_prompt = (
-            "You are an expert quantitative researcher. "
-            f"Propose {num_alphas} unique Fast Expression alphas. "
+            f"You are an elite quantitative researcher. Propose exactly {num_alphas} unique alpha expressions. "
+            "Use ADVANCED operators whenever possible to avoid correlation and reduce turnover. "
+            "Simple rank(close) alphas are rejected. You MUST use operators like ts_decay_linear, group_neutralize, trade_when, and ts_zscore. "
+            "Mix data categories: Price-Volume, Fundamental, Analyst. "
             f"You MUST ONLY use fields from this list: {known_fields}. "
             f"You MUST ONLY use these operators: {operators}. "
-            'Return ONLY a JSON array of strings, e.g. ["rank(close)", "ts_delta(volume, 5)"]. '
+            'Return ONLY a JSON array of strings, e.g. ["ts_decay_linear(rank(close), 5)", "group_neutralize(ts_zscore(volume, 20), sector)"]. '
             "Do NOT wrap in markdown block or add explanations."
         )
         prompt = f"Propose {num_alphas} unique Fast Expression alphas following the system instructions."

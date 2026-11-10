@@ -123,3 +123,20 @@ def test_critic_fails_open(mocker):
     inputs = ["rank(close)", "ts_delta(volume, 5)"]
     approved = client.critique_alphas(inputs)
     assert approved == inputs
+
+
+def test_advanced_prompt_contains_operators(mocker):
+    """Test that generate_alphas includes advanced operators in system prompt."""
+    mocker.patch.object(config, "GEMINI_API_KEYS", ["key1"])
+    client = LLMClient()
+    mock_call = mocker.patch.object(client, "_call_llm", return_value='["rank(close)"]')
+
+    client.generate_alphas(known_fields={"price_volume": ["close"]})
+
+    assert mock_call.called
+    kwargs = mock_call.call_args.kwargs
+    args = mock_call.call_args.args
+    system_prompt = kwargs.get("system_prompt") or (args[0] if args else "")
+    assert "ts_decay_linear" in system_prompt
+    assert "group_neutralize" in system_prompt
+
