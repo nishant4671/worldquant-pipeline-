@@ -9,11 +9,15 @@ import json
 import logging
 from pathlib import Path
 import sqlite3
+import threading
 from typing import Any
 
 from config import settings
 
 log = logging.getLogger(__name__)
+
+_initialized_dbs: set[str] = set()
+_init_lock = threading.Lock()
 
 
 def _resolve_db_path(db_path: Path | str | None = None) -> Path | str:
@@ -21,6 +25,24 @@ def _resolve_db_path(db_path: Path | str | None = None) -> Path | str:
     if db_path is None:
         return settings.db_path
     return db_path
+
+
+def _get_db_key(db_path: Path | str | None = None) -> str:
+    """Generate a canonical key for tracking initialized database files."""
+    target = _resolve_db_path(db_path)
+    try:
+        return str(Path(target).resolve())
+    except Exception:
+        return str(target)
+
+
+def _ensure_db(db_path: Path | str | None = None) -> Path | str:
+    """Resolve target path and ensure database schema is initialized once."""
+    target = _resolve_db_path(db_path)
+    key = _get_db_key(target)
+    if key not in _initialized_dbs:
+        init_db(target)
+    return target
 
 
 def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
@@ -40,40 +62,49 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
     return conn
 
 
-def init_db(db_path: Path | str | None = None) -> None:
+def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
     """Initialize database schema, creating the alphas table and indexes if missing.
 
     Args:
         db_path: Optional path to the database file.
+        force: If True, re-executes DDL even if already initialized.
     """
     target = _resolve_db_path(db_path)
-    log.info("Initializing database schema at %s", target)
-    with connect(target) as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS alphas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                alpha_id TEXT UNIQUE NOT NULL,
-                expression TEXT NOT NULL,
-                data_category TEXT,
-                sharpe REAL,
-                fitness REAL,
-                turnover REAL,
-                passed_filters INTEGER NOT NULL DEFAULT 0,
-                notified INTEGER NOT NULL DEFAULT 0,
-                submitted INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                raw_response TEXT
-            );
-            """
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_alphas_alpha_id ON alphas(alpha_id);"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_alphas_passing ON alphas(passed_filters, notified, sharpe DESC);"
-        )
-        conn.commit()
+    key = _get_db_key(target)
+
+    with _init_lock:
+        if not force and key in _initialized_dbs:
+            return
+
+        log.info("Initializing database schema at %s", target)
+        with connect(target) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alphas (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    alpha_id TEXT UNIQUE NOT NULL,
+                    expression TEXT NOT NULL,
+                    data_category TEXT,
+                    sharpe REAL,
+                    fitness REAL,
+                    turnover REAL,
+                    passed_filters INTEGER NOT NULL DEFAULT 0,
+                    notified INTEGER NOT NULL DEFAULT 0,
+                    submitted INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    raw_response TEXT
+                );
+                """
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_alphas_alpha_id ON alphas(alpha_id);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alphas_passing ON alphas(passed_filters, notified, sharpe DESC);"
+            )
+            conn.commit()
+
+        _initialized_dbs.add(key)
 
 
 def insert_alpha(record: dict[str, Any], db_path: Path | str | None = None) -> None:
@@ -83,8 +114,7 @@ def insert_alpha(record: dict[str, Any], db_path: Path | str | None = None) -> N
         record: Dictionary containing alpha metadata and metrics.
         db_path: Optional path to the database file.
     """
-    target = _resolve_db_path(db_path)
-    init_db(target)
+    target = _ensure_db(db_path)
 
     alpha_id = str(record["alpha_id"])
     expression = str(record.get("expression", ""))
@@ -153,8 +183,7 @@ def get_alpha(alpha_id: str, db_path: Path | str | None = None) -> dict[str, Any
     Returns:
         dict[str, Any] | None: Record as a dictionary, or None if not found.
     """
-    target = _resolve_db_path(db_path)
-    init_db(target)
+    target = _ensure_db(db_path)
     with connect(target) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM alphas WHERE alpha_id = ?", (alpha_id,))
@@ -174,8 +203,7 @@ def list_passing(limit: int = 4, db_path: Path | str | None = None) -> list[dict
     Returns:
         list[dict[str, Any]]: List of dictionary alpha records.
     """
-    target = _resolve_db_path(db_path)
-    init_db(target)
+    target = _ensure_db(db_path)
     with connect(target) as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -197,8 +225,7 @@ def mark_notified(alpha_id: str, db_path: Path | str | None = None) -> None:
         alpha_id: Unique alpha ID string.
         db_path: Optional path to the database file.
     """
-    target = _resolve_db_path(db_path)
-    init_db(target)
+    target = _ensure_db(db_path)
     with connect(target) as conn:
         conn.execute("UPDATE alphas SET notified = 1 WHERE alpha_id = ?", (alpha_id,))
         conn.commit()
@@ -211,8 +238,7 @@ def mark_submitted(alpha_id: str, db_path: Path | str | None = None) -> None:
         alpha_id: Unique alpha ID string.
         db_path: Optional path to the database file.
     """
-    target = _resolve_db_path(db_path)
-    init_db(target)
+    target = _ensure_db(db_path)
     with connect(target) as conn:
         conn.execute("UPDATE alphas SET submitted = 1 WHERE alpha_id = ?", (alpha_id,))
         conn.commit()
@@ -227,8 +253,7 @@ def summary(db_path: Path | str | None = None) -> dict[str, int]:
     Returns:
         dict[str, int]: Counts dictionary with keys total, passed, notified, submitted.
     """
-    target = _resolve_db_path(db_path)
-    init_db(target)
+    target = _ensure_db(db_path)
     with connect(target) as conn:
         cursor = conn.cursor()
         cursor.execute(

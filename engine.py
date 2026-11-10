@@ -69,6 +69,8 @@ class AlphaEngine:
             else getattr(settings, "poll_timeout_seconds", 1800)
         )
         self.db_path = db_path
+        # Initialize database schema once at the start
+        database.init_db(self.db_path)
 
     def _simulate_one(self, expr: str, category: str) -> SimulationResult:
         """Submit a single simulation, poll for completion, and filter metrics.
