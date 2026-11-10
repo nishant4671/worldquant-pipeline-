@@ -306,3 +306,55 @@ def test_engine_skips_duplicates(mocker, tmp_path):
     assert result.error == "Duplicate expression"
     assert mock_client.request.call_count == 0
 
+
+def test_polling_survives_500(mocker, tmp_path):
+    """Mock polling GET to return 500 three times before progress=1.0; assert simulation succeeds."""
+    db_file = tmp_path / "test_survives_500.db"
+    mocker.patch("time.sleep")
+    mock_client = mocker.MagicMock(spec=BrainClient)
+
+    poll_call_count = 0
+
+    def mock_req(method, path, **kwargs):
+        nonlocal poll_call_count
+        resp = mocker.MagicMock(spec=requests.Response)
+        if method.upper() == "POST":
+            resp.status_code = 201
+            resp.headers = {"Location": "https://api.worldquantbrain.com/simulations/sim-retry-500"}
+            resp.json.return_value = {"id": "sim-retry-500"}
+            return resp
+
+        if "/simulations/" in path:
+            poll_call_count += 1
+            if poll_call_count <= 3:
+                raise BrainApiError(500, "Internal Server Error")
+            resp.status_code = 200
+            resp.json.return_value = {
+                "progress": 1.0,
+                "alpha": "alpha-survived-500",
+                "status": "COMPLETE",
+            }
+            return resp
+
+        if "/alphas/" in path:
+            resp.status_code = 200
+            resp.json.return_value = {
+                "id": "alpha-survived-500",
+                "is": {"sharpe": 1.85, "fitness": 1.35, "turnover": 0.22},
+            }
+            return resp
+
+        resp.status_code = 200
+        resp.json.return_value = {}
+        return resp
+
+    mock_client.request.side_effect = mock_req
+
+    engine = AlphaEngine(client=mock_client, db_path=db_file)
+    result = engine._simulate_one("ts_rank(close, 10)", "price_volume")
+
+    assert result.status == "passed"
+    assert result.alpha_id == "alpha-survived-500"
+    assert poll_call_count == 4
+
+

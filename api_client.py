@@ -19,6 +19,7 @@ Verified BRAIN API endpoints:
 from datetime import datetime, timedelta, timezone
 import logging
 import threading
+import time
 from typing import Any
 import requests
 
@@ -110,8 +111,35 @@ class BrainClient:
             if not self.is_token_valid:
                 self._authenticate()
 
+    def _send_request(self, method: str, url: str, **kwargs: Any) -> requests.Response:
+        """Execute HTTP request with single-retry handling for network dropouts.
+
+        Args:
+            method: HTTP method string.
+            url: Fully qualified or relative URL.
+            **kwargs: Additional parameters forwarded to session.request.
+
+        Returns:
+            requests.Response: HTTP response.
+
+        Raises:
+            BrainApiError: On repeated network error.
+        """
+        try:
+            return self._session.request(method, url, **kwargs)
+        except requests.exceptions.RequestException as e:
+            log.warning("Network error encountered (%s). Retrying in 5s...", e)
+            time.sleep(5)
+            try:
+                return self._session.request(method, url, **kwargs)
+            except requests.exceptions.RequestException as retry_err:
+                log.error("Network error on retry (%s)", retry_err)
+                raise BrainApiError(500, f"Network error: {retry_err}")
+
     def request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
-        """Send an authenticated HTTP request to the BRAIN API with automatic 401 retry.
+        """Send an authenticated HTTP request to the BRAIN API with retry logic.
+
+        Handles network drops (single retry after 5s), 401 re-auth, and 429 rate limit backoff.
 
         Args:
             method: HTTP method string (e.g. 'GET', 'POST').
@@ -122,7 +150,7 @@ class BrainClient:
             requests.Response: Successful 2xx HTTP response object.
 
         Raises:
-            BrainApiError: On repeated 401 Unauthorized or any non-2xx response.
+            BrainApiError: On unrecoverable network failure, 429 rate limit, 401 unauthorized, or non-2xx status.
         """
         self._ensure_token()
 
@@ -134,23 +162,34 @@ class BrainClient:
         headers = dict(kwargs.pop("headers", None) or {})
         headers["Authorization"] = f"Bearer {self._token}"
 
-        resp = self._session.request(method, url, headers=headers, **kwargs)
+        resp = self._send_request(method, url, headers=headers, **kwargs)
 
         if resp.status_code == 401:
             log.warning("Received 401 Unauthorized for %s %s; attempting single re-auth and retry", method, url)
-            # A race condition can occur where the cached token expires on the server
-            # slightly before our local TTL calculation or is invalidated remotely.
-            # We acquire the lock, invalidate the stale token, re-authenticate to obtain
-            # a fresh token, and retry the request exactly once.
             with self._lock:
                 self._token = None
                 self._expiry = None
                 self._authenticate()
 
             headers["Authorization"] = f"Bearer {self._token}"
-            resp = self._session.request(method, url, headers=headers, **kwargs)
+            resp = self._send_request(method, url, headers=headers, **kwargs)
             if resp.status_code == 401:
                 raise BrainApiError(401, resp.text)
+
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After")
+            wait_time: float = 60.0
+            if retry_after:
+                try:
+                    wait_time = float(retry_after)
+                except (ValueError, TypeError):
+                    wait_time = 60.0
+            wait_val = int(wait_time) if wait_time.is_integer() else wait_time
+            log.warning("Rate limit hit (429). Sleeping for %s seconds.", wait_val)
+            time.sleep(wait_val)
+            resp = self._send_request(method, url, headers=headers, **kwargs)
+            if resp.status_code == 429:
+                raise BrainApiError(429, "Rate limit exceeded")
 
         if not (200 <= resp.status_code < 300):
             raise BrainApiError(resp.status_code, resp.text)

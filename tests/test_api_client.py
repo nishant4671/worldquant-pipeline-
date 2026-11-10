@@ -268,3 +268,54 @@ def test_no_print_statements():
     api_client_path = Path(__file__).resolve().parent.parent / "api_client.py"
     content = api_client_path.read_text(encoding="utf-8")
     assert "print(" not in content
+
+
+def test_429_backoff(mocker):
+    """Mock 429 with Retry-After: 2 header, followed by 200; assert client sleeps 2s and retries."""
+    client = BrainClient()
+    client._token = "valid-token"
+    client._expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    mock_sleep = mocker.patch("time.sleep")
+
+    resp_429 = mocker.MagicMock(spec=requests.Response)
+    resp_429.status_code = 429
+    resp_429.headers = {"Retry-After": "2"}
+    resp_429.text = "Rate limit hit"
+
+    resp_200 = mocker.MagicMock(spec=requests.Response)
+    resp_200.status_code = 200
+    resp_200.text = "OK"
+
+    mock_req = mocker.patch.object(client._session, "request", side_effect=[resp_429, resp_200])
+
+    resp = client.request("GET", "/test")
+
+    assert resp.status_code == 200
+    mock_sleep.assert_called_once_with(2)
+    assert mock_req.call_count == 2
+    client.close()
+
+
+def test_network_dropout(mocker):
+    """Mock session.request to raise ConnectionError; assert single retry and BrainApiError(500)."""
+    client = BrainClient()
+    client._token = "valid-token"
+    client._expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    mock_sleep = mocker.patch("time.sleep")
+    mock_req = mocker.patch.object(
+        client._session,
+        "request",
+        side_effect=requests.exceptions.ConnectionError("Connection lost"),
+    )
+
+    with pytest.raises(BrainApiError) as exc_info:
+        client.request("GET", "/test")
+
+    assert exc_info.value.status == 500
+    assert "Network error" in exc_info.value.body
+    mock_sleep.assert_called_once_with(5)
+    assert mock_req.call_count == 2
+    client.close()
+

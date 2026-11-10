@@ -16,7 +16,7 @@ import time
 from typing import Any
 import requests
 
-from api_client import BrainClient
+from api_client import BrainApiError, BrainClient
 from config import settings
 import database
 from generator import generate_expressions
@@ -127,8 +127,30 @@ class AlphaEngine:
             alpha_id: str | None = None
 
             while True:
-                poll_resp = self.client.request("GET", location)
-                poll_data = poll_resp.json()
+                if time.monotonic() - start_time > self.poll_timeout:
+                    return SimulationResult(
+                        expression=expr,
+                        category=category,
+                        alpha_id=None,
+                        status="error",
+                        metrics=None,
+                        error=f"Simulation timed out after {self.poll_timeout}s",
+                    )
+
+                try:
+                    poll_resp = self.client.request("GET", location)
+                    poll_data = poll_resp.json()
+                except BrainApiError as api_err:
+                    if api_err.status in (500, 502):
+                        log.warning(
+                            "Transient server error %s while polling %s: %s. Continuing...",
+                            api_err.status,
+                            location,
+                            api_err,
+                        )
+                        time.sleep(self.poll_interval)
+                        continue
+                    raise
 
                 progress = float(poll_data.get("progress", 0.0) or 0.0)
                 status_val = str(poll_data.get("status", "")).upper()
@@ -151,16 +173,6 @@ class AlphaEngine:
                         or poll_data.get("id")
                     )
                     break
-
-                if time.monotonic() - start_time > self.poll_timeout:
-                    return SimulationResult(
-                        expression=expr,
-                        category=category,
-                        alpha_id=None,
-                        status="error",
-                        metrics=None,
-                        error=f"Simulation timed out after {self.poll_timeout}s",
-                    )
 
                 time.sleep(self.poll_interval)
 
