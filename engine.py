@@ -28,10 +28,10 @@ log = logging.getLogger(__name__)
 class SimulationResult:
     """Container for alpha simulation output and quality evaluation."""
 
-    expression: str
-    category: str
-    alpha_id: str | None
-    status: str  # "passed", "failed_filters", or "error"
+    expression: str = ""
+    category: str = ""
+    alpha_id: str | None = None
+    status: str = "error"  # "passed", "failed_filters", "skipped", or "error"
     metrics: dict[str, Any] | None = None
     error: str | None = None
 
@@ -83,6 +83,17 @@ class AlphaEngine:
             SimulationResult: Result object containing status, alpha_id, metrics, or error.
         """
         log.info("Starting simulation for %s: %s", category, expr)
+        if database.expression_exists(expr, self.db_path):
+            log.info("Skipping duplicate expression: %s", expr)
+            return SimulationResult(
+                expression=expr,
+                category=category,
+                alpha_id=None,
+                status="skipped",
+                metrics=None,
+                error="Duplicate expression",
+            )
+
         try:
             payload = {
                 "type": "REGULAR",

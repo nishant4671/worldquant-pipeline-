@@ -1,10 +1,12 @@
 """Database operations module for WorldQuant BRAIN pipeline.
 
 Provides SQLite persistence for simulated alphas, quality filters,
-Telegram notification status, and web UI submission tracking.
+Telegram notification status, web UI submission tracking, and
+cryptographic deduplication of alpha expressions.
 """
 
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -18,6 +20,19 @@ log = logging.getLogger(__name__)
 
 _initialized_dbs: set[str] = set()
 _init_lock = threading.Lock()
+
+
+def hash_expression(expr: str) -> str:
+    """Compute deterministic SHA-256 hash of normalized expression string.
+
+    Args:
+        expr: Raw Fast Expression string.
+
+    Returns:
+        str: Hexadecimal SHA-256 digest of normalized expression.
+    """
+    normalized = expr.lower().replace(" ", "").strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _resolve_db_path(db_path: Path | str | None = None) -> Path | str:
@@ -65,6 +80,8 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
 def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
     """Initialize database schema, creating the alphas table and indexes if missing.
 
+    Handles schema migrations for existing tables lacking the expression_hash column.
+
     Args:
         db_path: Optional path to the database file.
         force: If True, re-executes DDL even if already initialized.
@@ -84,6 +101,7 @@ def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     alpha_id TEXT UNIQUE NOT NULL,
                     expression TEXT NOT NULL,
+                    expression_hash TEXT UNIQUE,
                     data_category TEXT,
                     sharpe REAL,
                     fitness REAL,
@@ -102,6 +120,29 @@ def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_alphas_passing ON alphas(passed_filters, notified, sharpe DESC);"
             )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_alphas_expression_hash ON alphas(expression_hash);"
+            )
+
+            # Check if migration is needed for existing tables without expression_hash
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(alphas)")
+            columns = [row["name"] for row in cursor.fetchall()]
+            if "expression_hash" not in columns:
+                conn.execute("ALTER TABLE alphas ADD COLUMN expression_hash TEXT")
+                cursor.execute("SELECT id, expression FROM alphas WHERE expression_hash IS NULL")
+                rows = cursor.fetchall()
+                for row in rows:
+                    h = hash_expression(row["expression"])
+                    conn.execute("UPDATE alphas SET expression_hash = ? WHERE id = ?", (h, row["id"]))
+            else:
+                # Backfill any existing rows with null expression_hash
+                cursor.execute("SELECT id, expression FROM alphas WHERE expression_hash IS NULL")
+                rows = cursor.fetchall()
+                for row in rows:
+                    h = hash_expression(row["expression"])
+                    conn.execute("UPDATE alphas SET expression_hash = ? WHERE id = ?", (h, row["id"]))
+
             conn.commit()
 
         _initialized_dbs.add(key)
@@ -109,6 +150,8 @@ def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
 
 def insert_alpha(record: dict[str, Any], db_path: Path | str | None = None) -> None:
     """Insert or replace an alpha record based on alpha_id.
+
+    Automatically computes and persists normalized expression_hash.
 
     Args:
         record: Dictionary containing alpha metadata and metrics.
@@ -118,6 +161,7 @@ def insert_alpha(record: dict[str, Any], db_path: Path | str | None = None) -> N
 
     alpha_id = str(record["alpha_id"])
     expression = str(record.get("expression", ""))
+    expr_hash = record.get("expression_hash") or hash_expression(expression)
     data_category = record.get("data_category") or record.get("category")
     data_category = str(data_category) if data_category is not None else None
 
@@ -152,13 +196,14 @@ def insert_alpha(record: dict[str, Any], db_path: Path | str | None = None) -> N
         conn.execute(
             """
             INSERT OR REPLACE INTO alphas (
-                alpha_id, expression, data_category, sharpe, fitness, turnover,
+                alpha_id, expression, expression_hash, data_category, sharpe, fitness, turnover,
                 passed_filters, notified, submitted, created_at, raw_response
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 alpha_id,
                 expression,
+                expr_hash,
                 data_category,
                 sharpe_val,
                 fitness_val,
@@ -171,6 +216,24 @@ def insert_alpha(record: dict[str, Any], db_path: Path | str | None = None) -> N
             ),
         )
         conn.commit()
+
+
+def expression_exists(expr: str, db_path: Path | str | None = None) -> bool:
+    """Check if a normalized expression has already been simulated and recorded in the database.
+
+    Args:
+        expr: Alpha expression string.
+        db_path: Optional path to the database file.
+
+    Returns:
+        bool: True if expression hash exists in database, False otherwise.
+    """
+    target = _ensure_db(db_path)
+    expr_hash = hash_expression(expr)
+    with connect(target) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM alphas WHERE expression_hash = ? LIMIT 1", (expr_hash,))
+        return cursor.fetchone() is not None
 
 
 def get_alpha(alpha_id: str, db_path: Path | str | None = None) -> dict[str, Any] | None:

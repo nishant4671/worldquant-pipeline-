@@ -197,3 +197,69 @@ def test_summary(tmp_path):
     assert stats["passed"] == 2
     assert stats["notified"] == 1
     assert stats["submitted"] == 1
+
+
+def test_hash_deduplication():
+    """Assert expression hashing normalizes whitespace and casing."""
+    h1 = database.hash_expression("rank(close)")
+    h2 = database.hash_expression("rank( close )")
+    h3 = database.hash_expression("RANK(CLOSE)")
+    assert h1 == h2
+    assert h1 == h3
+
+
+def test_expression_exists(tmp_path):
+    """Insert an alpha, assert expression_exists is True for it and False for another."""
+    db_file = tmp_path / "test_exists.db"
+    database.insert_alpha(
+        {
+            "alpha_id": "alpha_ex_1",
+            "expression": "rank(close)",
+            "data_category": "price_volume",
+            "sharpe": 1.5,
+            "passed_filters": 1,
+        },
+        db_path=db_file,
+    )
+
+    assert database.expression_exists("rank(close)", db_path=db_file) is True
+    assert database.expression_exists("rank( close )", db_path=db_file) is True
+    assert database.expression_exists("rank(volume)", db_path=db_file) is False
+
+
+def test_backlog(tmp_path):
+    """Insert 6 passing alphas (Sharpe 2.0 down to 1.5).
+
+    list_passing(limit=4) yields top 4.
+    Marking those 4 notified yields the remaining 2 on subsequent list_passing(limit=4).
+    """
+    db_file = tmp_path / "test_backlog.db"
+    sharpes = [2.0, 1.9, 1.8, 1.7, 1.6, 1.5]
+    for i, s in enumerate(sharpes):
+        database.insert_alpha(
+            {
+                "alpha_id": f"alpha_backlog_{i}",
+                "expression": f"rank(field_{i})",
+                "sharpe": s,
+                "fitness": 1.2,
+                "turnover": 0.2,
+                "passed_filters": 1,
+                "notified": 0,
+            },
+            db_path=db_file,
+        )
+
+    # First batch of top 4
+    batch1 = database.list_passing(limit=4, db_path=db_file)
+    assert len(batch1) == 4
+    assert [a["sharpe"] for a in batch1] == [2.0, 1.9, 1.8, 1.7]
+
+    # Mark first 4 as notified
+    for a in batch1:
+        database.mark_notified(a["alpha_id"], db_path=db_file)
+
+    # Second batch of remaining 2
+    batch2 = database.list_passing(limit=4, db_path=db_file)
+    assert len(batch2) == 2
+    assert [a["sharpe"] for a in batch2] == [1.6, 1.5]
+

@@ -291,3 +291,18 @@ def test_engine_ignores_failing_in_db(mocker, tmp_path):
     assert row is not None
     assert row["alpha_id"] == "alpha-fail-111"
     assert row["passed_filters"] == 0
+
+
+def test_engine_skips_duplicates(mocker, tmp_path):
+    """Mock database.expression_exists to return True and assert API is never called."""
+    db_file = tmp_path / "test_engine_dup.db"
+    mocker.patch("database.expression_exists", return_value=True)
+    mock_client = mocker.MagicMock(spec=BrainClient)
+
+    engine = AlphaEngine(client=mock_client, db_path=db_file)
+    result = engine._simulate_one("rank(close)", "price_volume")
+
+    assert result.status == "skipped"
+    assert result.error == "Duplicate expression"
+    assert mock_client.request.call_count == 0
+
