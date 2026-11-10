@@ -101,3 +101,25 @@ def test_invalid_json_handling(mocker):
     assert res == []
     # Attempt 1 + 1 retry = 2 calls
     assert mock_generate.call_count == 2
+
+
+def test_critic_approves(mocker):
+    """Test that critique_alphas returns approved list from _call_llm."""
+    mocker.patch.object(config, "GEMINI_API_KEYS", ["key1"])
+    client = LLMClient()
+    mocker.patch.object(client, "_call_llm", return_value=["rank(close)"])
+
+    inputs = ["rank(close)", "rank(close) - rank(close)"]
+    approved = client.critique_alphas(inputs)
+    assert approved == ["rank(close)"]
+
+
+def test_critic_fails_open(mocker):
+    """Test that critique_alphas fails open and returns original list on invalid JSON."""
+    mocker.patch.object(config, "GEMINI_API_KEYS", ["key1"])
+    client = LLMClient()
+    mocker.patch.object(client, "_call_llm", return_value="invalid JSON response")
+
+    inputs = ["rank(close)", "ts_delta(volume, 5)"]
+    approved = client.critique_alphas(inputs)
+    assert approved == inputs

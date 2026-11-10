@@ -1,7 +1,8 @@
 """Google GenAI LLM Client for WorldQuant BRAIN Fast Expression alpha generation.
 
 Migrated to google-genai SDK. Manages API interactions, key rotation upon
-HTTP 429 rate limits, and JSON parsing for proposed alpha expressions.
+HTTP 429 rate limits, JSON parsing for proposed alpha expressions, and
+portfolio manager critique filtering.
 """
 
 import json
@@ -51,7 +52,7 @@ def _is_rate_limit_error(exc: Exception) -> bool:
 
 
 class LLMClient:
-    """Client for generating Fast Expression alphas via Google Gemini."""
+    """Client for generating and critiquing Fast Expression alphas via Google Gemini."""
 
     def __init__(self, api_keys: list[str] | None = None) -> None:
         """Initialize LLM client with configured Gemini API keys.
@@ -127,6 +128,19 @@ class LLMClient:
                 log.error("Gemini API call failed: %s", e)
                 return None
 
+    def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
+        """Call LLM with system prompt and user prompt, returning raw text.
+
+        Args:
+            system_prompt: System instruction directing model persona and format.
+            user_prompt: User prompt content.
+
+        Returns:
+            str: Generated text response, or empty string on failure.
+        """
+        result = self._call_model(prompt=user_prompt, system_prompt=system_prompt)
+        return result if result is not None else ""
+
     def _parse_alphas(self, raw_text: str) -> list[str]:
         """Parse raw response text into a list of alpha expression strings.
 
@@ -171,8 +185,10 @@ class LLMClient:
         )
         prompt = f"Propose {num_alphas} unique Fast Expression alphas following the system instructions."
 
-        raw_text = self._call_model(prompt, system_prompt)
-        if raw_text is None:
+        raw_text = self._call_llm(system_prompt=system_prompt, user_prompt=prompt)
+        if isinstance(raw_text, list):
+            return [str(item) for item in raw_text]
+        if not raw_text:
             return []
 
         try:
@@ -180,11 +196,45 @@ class LLMClient:
         except Exception as parse_err:
             log.warning("LLM output invalid JSON on first attempt (%s). Retrying once...", parse_err)
             # Retry ONCE
-            retry_text = self._call_model(prompt, system_prompt)
-            if retry_text is None:
+            retry_text = self._call_llm(system_prompt=system_prompt, user_prompt=prompt)
+            if isinstance(retry_text, list):
+                return [str(item) for item in retry_text]
+            if not retry_text:
                 return []
             try:
                 return self._parse_alphas(retry_text)
             except Exception as retry_parse_err:
                 log.error("LLM output invalid JSON on second attempt: %s", retry_parse_err)
                 return []
+
+    def critique_alphas(self, expressions: list[str]) -> list[str]:
+        """Critique and filter candidate alphas using a strict PM persona.
+
+        Args:
+            expressions: Candidate Fast Expression strings.
+
+        Returns:
+            list[str]: Approved expressions. If parsing fails, returns original
+                input expressions (fail-open).
+        """
+        if not expressions:
+            return []
+
+        system_prompt = (
+            "You are a strict Quantitative Portfolio Manager. Review the following Fast Expression alphas. "
+            "Veto any that are mathematically trivial, redundant (like adding X and subtracting X), "
+            "or lack economic intuition. Return ONLY a JSON array of the approved expressions. "
+            "Do not include explanations."
+        )
+        user_prompt = json.dumps(expressions)
+
+        try:
+            raw = self._call_llm(system_prompt=system_prompt, user_prompt=user_prompt)
+            if isinstance(raw, list):
+                return [str(item) for item in raw]
+            if not raw or not isinstance(raw, str):
+                return expressions
+            return self._parse_alphas(raw)
+        except Exception as e:
+            log.warning("Critique failed or returned invalid JSON (%s); failing open.", e)
+            return expressions
