@@ -7,14 +7,18 @@ retrieves in-sample performance metrics, and applies quality filter gates.
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import logging
+from pathlib import Path
+import tempfile
 import time
 from typing import Any
 import requests
 
 from api_client import BrainClient
 from config import settings
+import database
 from generator import generate_expressions
 
 log = logging.getLogger(__name__)
@@ -41,6 +45,7 @@ class AlphaEngine:
         max_workers: int = 3,
         poll_interval: float | None = None,
         poll_timeout: float | None = None,
+        db_path: Path | str | None = None,
     ) -> None:
         """Initialize engine with BrainClient and concurrency parameters.
 
@@ -49,6 +54,7 @@ class AlphaEngine:
             max_workers: Max concurrent simulation threads (default 3).
             poll_interval: Polling interval in seconds (default from settings).
             poll_timeout: Max polling timeout in seconds (default from settings).
+            db_path: Optional path to SQLite database. If None, uses default.
         """
         self.client = client
         self.max_workers = max_workers
@@ -62,6 +68,7 @@ class AlphaEngine:
             if poll_timeout is not None
             else getattr(settings, "poll_timeout_seconds", 1800)
         )
+        self.db_path = db_path
 
     def _simulate_one(self, expr: str, category: str) -> SimulationResult:
         """Submit a single simulation, poll for completion, and filter metrics.
@@ -189,6 +196,26 @@ class AlphaEngine:
                 result_status = "passed"
             else:
                 result_status = "failed_filters"
+
+            # Persist completed simulation result to database
+            if alpha_id:
+                try:
+                    database.insert_alpha(
+                        {
+                            "alpha_id": alpha_id,
+                            "expression": expr,
+                            "data_category": category,
+                            "sharpe": float(sharpe) if isinstance(sharpe, (int, float)) else None,
+                            "fitness": float(fitness) if isinstance(fitness, (int, float)) else None,
+                            "turnover": float(turnover) if isinstance(turnover, (int, float)) else None,
+                            "passed_filters": 1 if result_status == "passed" else 0,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                            "raw_response": is_metrics,
+                        },
+                        db_path=self.db_path,
+                    )
+                except Exception as db_err:
+                    log.exception("Failed to insert alpha %s into database: %s", alpha_id, db_err)
 
             return SimulationResult(
                 expression=expr,
@@ -325,25 +352,34 @@ def _main() -> None:
         print("=== Running Mock Concurrency Test (10 expressions, max_workers=3) ===")
         expressions = generate_expressions(10, seed=42)
         fake_client = FakeClient()
-        engine = AlphaEngine(client=fake_client, max_workers=3)
+        temp_db_path = Path(tempfile.gettempdir()) / f"alphas_mock_{int(time.time())}.db"
 
-        start_time = time.perf_counter()
-        results = engine.run_batch(expressions)
-        elapsed = time.perf_counter() - start_time
+        try:
+            engine = AlphaEngine(client=fake_client, max_workers=3, db_path=temp_db_path)
 
-        for i, res in enumerate(results, 1):
-            sharpe = res.metrics.get("sharpe") if res.metrics else None
-            fitness = res.metrics.get("fitness") if res.metrics else None
-            turnover = res.metrics.get("turnover") if res.metrics else None
-            print(
-                f"[{i:2d}] status={res.status:14s} | alpha_id={res.alpha_id} | "
-                f"metrics={{sharpe={sharpe}, fitness={fitness}, turnover={turnover}}} | "
-                f"expr={res.expression}"
-            )
+            start_time = time.perf_counter()
+            results = engine.run_batch(expressions)
+            elapsed = time.perf_counter() - start_time
 
-        print(f"\nWall-clock elapsed time: {elapsed:.2f}s")
-        assert elapsed < 5.0, f"Expected elapsed time < 5.0s, got {elapsed:.2f}s"
-        print("ASSERTION PASSED: Concurrency verified (10 items across 3 workers completed in < 5.0s).")
+            for i, res in enumerate(results, 1):
+                sharpe = res.metrics.get("sharpe") if res.metrics else None
+                fitness = res.metrics.get("fitness") if res.metrics else None
+                turnover = res.metrics.get("turnover") if res.metrics else None
+                print(
+                    f"[{i:2d}] status={res.status:14s} | alpha_id={res.alpha_id} | "
+                    f"metrics={{sharpe={sharpe}, fitness={fitness}, turnover={turnover}}} | "
+                    f"expr={res.expression}"
+                )
+
+            print(f"\nWall-clock elapsed time: {elapsed:.2f}s")
+            assert elapsed < 5.0, f"Expected elapsed time < 5.0s, got {elapsed:.2f}s"
+            print("ASSERTION PASSED: Concurrency verified (10 items across 3 workers completed in < 5.0s).")
+        finally:
+            if temp_db_path.exists():
+                try:
+                    temp_db_path.unlink()
+                except OSError:
+                    pass
 
     elif args.real:
         print("=== Running Single Real Simulation against WorldQuant BRAIN API ===")

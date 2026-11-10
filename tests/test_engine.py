@@ -9,6 +9,7 @@ import requests
 
 from api_client import BrainApiError, BrainClient
 import config
+import database
 from engine import AlphaEngine, SimulationResult
 
 
@@ -48,11 +49,12 @@ def _make_mock_client_for_metrics(mocker, metrics, progress=1.0, alpha_id="A123"
     return mock_client
 
 
-def test_concurrency_limit(mocker):
+def test_concurrency_limit(mocker, tmp_path):
     """Test that max_workers=3 limits concurrent active requests to exactly 3."""
     active_threads = 0
     max_active_threads = 0
     lock = threading.Lock()
+    db_file = tmp_path / "test_concurrency.db"
 
     def mock_request(method, path, **kwargs):
         nonlocal active_threads, max_active_threads
@@ -91,7 +93,7 @@ def test_concurrency_limit(mocker):
     mock_client = mocker.MagicMock(spec=BrainClient)
     mock_client.request.side_effect = mock_request
 
-    engine = AlphaEngine(client=mock_client, max_workers=3)
+    engine = AlphaEngine(client=mock_client, max_workers=3, db_path=db_file)
     expressions = [(f"expr_{i}", "price_volume") for i in range(10)]
     results = engine.run_batch(expressions)
 
@@ -99,11 +101,12 @@ def test_concurrency_limit(mocker):
     assert max_active_threads == 3
 
 
-def test_filter_pass(mocker):
+def test_filter_pass(mocker, tmp_path):
     """Test that an alpha meeting all quality thresholds receives status='passed'."""
+    db_file = tmp_path / "test_filter_pass.db"
     metrics = {"sharpe": 2.0, "fitness": 1.5, "turnover": 0.3}
     client = _make_mock_client_for_metrics(mocker, metrics)
-    engine = AlphaEngine(client=client)
+    engine = AlphaEngine(client=client, db_path=db_file)
 
     result = engine._simulate_one("rank(close)", "price_volume")
 
@@ -112,11 +115,12 @@ def test_filter_pass(mocker):
     assert result.metrics == metrics
 
 
-def test_filter_fail_sharpe(mocker):
+def test_filter_fail_sharpe(mocker, tmp_path):
     """Test that an alpha failing Sharpe threshold receives status='failed_filters'."""
+    db_file = tmp_path / "test_fail_sharpe.db"
     metrics = {"sharpe": 1.0, "fitness": 1.5, "turnover": 0.3}
     client = _make_mock_client_for_metrics(mocker, metrics)
-    engine = AlphaEngine(client=client)
+    engine = AlphaEngine(client=client, db_path=db_file)
 
     result = engine._simulate_one("rank(close)", "price_volume")
 
@@ -124,11 +128,12 @@ def test_filter_fail_sharpe(mocker):
     assert result.metrics == metrics
 
 
-def test_filter_fail_fitness(mocker):
+def test_filter_fail_fitness(mocker, tmp_path):
     """Test that an alpha failing fitness threshold receives status='failed_filters'."""
+    db_file = tmp_path / "test_fail_fitness.db"
     metrics = {"sharpe": 2.0, "fitness": 0.9, "turnover": 0.3}
     client = _make_mock_client_for_metrics(mocker, metrics)
-    engine = AlphaEngine(client=client)
+    engine = AlphaEngine(client=client, db_path=db_file)
 
     result = engine._simulate_one("rank(close)", "price_volume")
 
@@ -136,11 +141,12 @@ def test_filter_fail_fitness(mocker):
     assert result.metrics == metrics
 
 
-def test_filter_fail_turnover_low(mocker):
+def test_filter_fail_turnover_low(mocker, tmp_path):
     """Test that an alpha failing minimum turnover threshold receives status='failed_filters'."""
+    db_file = tmp_path / "test_fail_turnover_low.db"
     metrics = {"sharpe": 2.0, "fitness": 1.5, "turnover": 0.005}
     client = _make_mock_client_for_metrics(mocker, metrics)
-    engine = AlphaEngine(client=client)
+    engine = AlphaEngine(client=client, db_path=db_file)
 
     result = engine._simulate_one("rank(close)", "price_volume")
 
@@ -148,11 +154,12 @@ def test_filter_fail_turnover_low(mocker):
     assert result.metrics == metrics
 
 
-def test_filter_fail_turnover_high(mocker):
+def test_filter_fail_turnover_high(mocker, tmp_path):
     """Test that an alpha failing maximum turnover threshold receives status='failed_filters'."""
+    db_file = tmp_path / "test_fail_turnover_high.db"
     metrics = {"sharpe": 2.0, "fitness": 1.5, "turnover": 0.8}
     client = _make_mock_client_for_metrics(mocker, metrics)
-    engine = AlphaEngine(client=client)
+    engine = AlphaEngine(client=client, db_path=db_file)
 
     result = engine._simulate_one("rank(close)", "price_volume")
 
@@ -160,12 +167,13 @@ def test_filter_fail_turnover_high(mocker):
     assert result.metrics == metrics
 
 
-def test_api_error_handling(mocker):
+def test_api_error_handling(mocker, tmp_path):
     """Test that BrainApiError during simulation is caught and returns status='error'."""
+    db_file = tmp_path / "test_api_err.db"
     mock_client = mocker.MagicMock(spec=BrainClient)
     mock_client.request.side_effect = BrainApiError(500, "Internal Server Error")
 
-    engine = AlphaEngine(client=mock_client)
+    engine = AlphaEngine(client=mock_client, db_path=db_file)
     result = engine._simulate_one("rank(close)", "price_volume")
 
     assert result.status == "error"
@@ -173,8 +181,9 @@ def test_api_error_handling(mocker):
     assert "Internal Server Error" in result.error
 
 
-def test_polling_timeout(mocker, monkeypatch):
+def test_polling_timeout(mocker, monkeypatch, tmp_path):
     """Test that simulation timing out returns status='error' with timeout message."""
+    db_file = tmp_path / "test_timeout.db"
     mock_client = mocker.MagicMock(spec=BrainClient)
 
     def mock_req(method, path, **kwargs):
@@ -200,7 +209,7 @@ def test_polling_timeout(mocker, monkeypatch):
     )
     monkeypatch.setattr("engine.settings", fake_settings)
 
-    engine = AlphaEngine(client=mock_client)
+    engine = AlphaEngine(client=mock_client, db_path=db_file)
     result = engine._simulate_one("rank(close)", "price_volume")
 
     assert result.status == "error"
@@ -208,8 +217,9 @@ def test_polling_timeout(mocker, monkeypatch):
     assert "timed out" in result.error.lower() or "timeout" in result.error.lower()
 
 
-def test_missing_metrics_handling(mocker):
+def test_missing_metrics_handling(mocker, tmp_path):
     """Test that missing 'is' metrics dictionary returns status='error'."""
+    db_file = tmp_path / "test_missing_metrics.db"
     mock_client = mocker.MagicMock(spec=BrainClient)
 
     def mock_req(method, path, **kwargs):
@@ -240,7 +250,44 @@ def test_missing_metrics_handling(mocker):
 
     mock_client.request.side_effect = mock_req
 
-    engine = AlphaEngine(client=mock_client)
+    engine = AlphaEngine(client=mock_client, db_path=db_file)
     result = engine._simulate_one("rank(close)", "price_volume")
 
     assert result.status == "error"
+
+
+def test_engine_saves_passing_to_db(mocker, tmp_path):
+    """Test that a passing simulation result is persisted with passed_filters=1."""
+    db_file = tmp_path / "test_engine_save_pass.db"
+    metrics = {"sharpe": 1.95, "fitness": 1.45, "turnover": 0.28}
+    client = _make_mock_client_for_metrics(mocker, metrics, progress=1.0, alpha_id="alpha-pass-999")
+
+    engine = AlphaEngine(client=client, db_path=db_file)
+    result = engine._simulate_one("ts_rank(close, 20)", "price_volume")
+
+    assert result.status == "passed"
+    row = database.get_alpha("alpha-pass-999", db_path=db_file)
+    assert row is not None
+    assert row["alpha_id"] == "alpha-pass-999"
+    assert row["expression"] == "ts_rank(close, 20)"
+    assert row["data_category"] == "price_volume"
+    assert row["sharpe"] == 1.95
+    assert row["fitness"] == 1.45
+    assert row["turnover"] == 0.28
+    assert row["passed_filters"] == 1
+
+
+def test_engine_ignores_failing_in_db(mocker, tmp_path):
+    """Test that an alpha failing filters is saved with passed_filters=0."""
+    db_file = tmp_path / "test_engine_failing.db"
+    metrics = {"sharpe": 0.5, "fitness": 0.2, "turnover": 0.05}
+    client = _make_mock_client_for_metrics(mocker, metrics, progress=1.0, alpha_id="alpha-fail-111")
+
+    engine = AlphaEngine(client=client, db_path=db_file)
+    result = engine._simulate_one("rank(volume)", "price_volume")
+
+    assert result.status == "failed_filters"
+    row = database.get_alpha("alpha-fail-111", db_path=db_file)
+    assert row is not None
+    assert row["alpha_id"] == "alpha-fail-111"
+    assert row["passed_filters"] == 0
