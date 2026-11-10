@@ -1,12 +1,13 @@
 """Main CLI entry point for WorldQuant BRAIN automated pipeline.
 
-Orchestrates authentication, expression generation, simulation, persistence,
-Telegram notification, and full end-to-end execution.
+Orchestrates authentication, expression generation, validation, critique,
+simulation, persistence, Telegram notification, and full end-to-end execution.
 """
 
 import argparse
 import json
 import logging
+from pathlib import Path
 import sys
 import time
 from typing import Any
@@ -14,11 +15,64 @@ from typing import Any
 from api_client import BrainApiError, BrainClient
 from config import TELEGRAM_CHAT_ID, settings
 import database
-from engine import AlphaEngine, FakeClient
-from generator import generate_expressions
+from engine import AlphaEngine, FakeClient, SimulationResult
+from generator import KNOWN_FIELDS, generate_expressions
+from llm_client import LLMClient
 import notifier
+import validator
 
 log = logging.getLogger(__name__)
+
+FAST_EXPR_OPERATORS = [
+    "rank",
+    "ts_rank",
+    "ts_delta",
+    "ts_mean",
+    "ts_zscore",
+    "ts_decay_linear",
+    "group_rank",
+]
+
+
+class MockLLMClient:
+    """Mock LLM client returning verified fast expressions without network calls."""
+
+    def generate_alphas(
+        self,
+        known_fields: dict[str, list[str]],
+        operators: list[str],
+        num_alphas: int = 5,
+    ) -> list[str]:
+        """Propose canned valid alpha expressions for mock runs."""
+        sample_fields = ["close", "volume", "open", "high", "low", "returns"]
+        return [f"rank({sample_fields[i % len(sample_fields)]})" for i in range(num_alphas)]
+
+    def critique_alphas(self, expressions: list[str]) -> list[str]:
+        """Approve all expressions in mock runs."""
+        return expressions
+
+
+def _setup_logging(verbose: bool = False) -> None:
+    """Configure logging to write to pipeline.log (append mode) and stdout."""
+    log_level = logging.DEBUG if verbose else logging.INFO
+    formatter = logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
+
+    root = logging.getLogger()
+    root.setLevel(log_level)
+
+    # Clear existing handlers to prevent duplicate lines
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(log_level)
+    console_handler.setFormatter(formatter)
+    root.addHandler(console_handler)
+
+    file_handler = logging.FileHandler("pipeline.log", mode="a", encoding="utf-8")
+    file_handler.setLevel(log_level)
+    file_handler.setFormatter(formatter)
+    root.addHandler(file_handler)
 
 
 def _cmd_auth(args: argparse.Namespace) -> None:
@@ -47,6 +101,8 @@ def _cmd_simulate(args: argparse.Namespace) -> None:
             print(f"PASS: {res.alpha_id} | {res.expression} | {res.metrics}")
         elif res.status == "failed_filters":
             print(f"FAIL: {res.alpha_id} | {res.expression} | {res.metrics}")
+        elif res.status == "skipped":
+            print(f"SKIP: {res.expression} | {res.error}")
         else:
             print(f"ERROR: {res.expression} | {res.error}")
 
@@ -98,22 +154,64 @@ def _cmd_listen(args: argparse.Namespace) -> None:
 
 
 def _cmd_pipeline(args: argparse.Namespace) -> None:
-    """Run full end-to-end pipeline: Init DB -> generate N -> simulate -> send digest."""
-    log.info("Initializing database...")
+    """Run full intelligent pipeline: Init DB -> Propose -> Validate -> Critique -> Simulate -> Digest."""
+    log.info("Step 1: Initializing database...")
     database.init_db()
 
-    log.info("Generating %d expressions...", args.n)
-    pairs = generate_expressions(n=args.n)
+    log.info("Step 2: Initializing LLM client (mock=%s)...", args.mock)
+    if args.mock:
+        log.info("[MOCK] Running with mock LLM client and mock Brain client.")
+        client = FakeClient()
+        try:
+            inst = LLMClient()
+            if isinstance(inst, LLMClient):
+                llm_client = MockLLMClient()
+            else:
+                llm_client = inst
+        except Exception:
+            llm_client = MockLLMClient()
+    else:
+        client = BrainClient()
+        llm_client = LLMClient()
 
-    log.info("Starting simulations (mock=%s)...", args.mock)
-    client = FakeClient() if args.mock else BrainClient()
+    log.info("Step 3: Proposing %d Fast Expressions via LLM...", args.n)
+    proposed = llm_client.generate_alphas(KNOWN_FIELDS, FAST_EXPR_OPERATORS, num_alphas=args.n)
+    if not proposed:
+        log.warning("No alphas proposed by LLM. Exiting pipeline gracefully.")
+        print("Pipeline finished: 0 alphas proposed.")
+        return
+
+    log.info("Step 4: Statically validating %d proposed expressions...", len(proposed))
+    valid_exprs, rejected = validator.validate_batch(proposed)
+    for rej_expr, reason in rejected:
+        log.warning("Validator rejected '%s': %s", rej_expr, reason)
+
+    if not valid_exprs:
+        log.warning("All proposed alphas were rejected by validator. Exiting pipeline gracefully.")
+        print("Pipeline finished: 0 valid alphas remaining.")
+        return
+
+    log.info("Step 5: Passing %d valid expressions to Portfolio Manager Critic...", len(valid_exprs))
+    approved = llm_client.critique_alphas(valid_exprs)
+    if not approved:
+        log.warning("No alphas approved by PM Critic. Exiting pipeline gracefully.")
+        print("Pipeline finished: 0 approved alphas remaining.")
+        return
+
+    log.info("Step 6: Simulating %d approved alphas (mock=%s)...", len(approved), args.mock)
+    pairs = [(expr, "price_volume") for expr in approved]
     engine = AlphaEngine(client=client)
     results = engine.run_batch(pairs)
 
     passed_count = sum(1 for r in results if r.status == "passed")
-    print(f"Simulation completed: {len(results)} simulated, {passed_count} passed filters.")
+    skipped_count = sum(1 for r in results if r.status == "skipped")
+    error_count = sum(1 for r in results if r.status == "error")
+    print(
+        f"Simulation completed: {len(results)} simulated "
+        f"({passed_count} passed, {skipped_count} skipped, {error_count} errors)."
+    )
 
-    log.info("Sending Telegram digest...")
+    log.info("Step 7: Sending daily digest to Telegram...")
     sent = notifier.send_digest()
     print(f"Digest step completed: sent {len(sent)} alphas.")
 
@@ -174,12 +272,7 @@ def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
-    # Configure logging
-    log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    )
+    _setup_logging(args.verbose)
 
     exit_code = 0
     try:
