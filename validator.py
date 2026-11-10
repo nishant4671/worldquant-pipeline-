@@ -18,20 +18,23 @@ ALL_KNOWN_FIELDS: set[str] = {
 }
 
 # Allowed Fast Expression operators and group identifiers
-KNOWN_OPERATORS: set[str] = {
+ALLOWED_OPERATORS: set[str] = {
     "rank",
     "ts_rank",
     "ts_delta",
     "ts_mean",
     "ts_zscore",
     "ts_decay_linear",
-    "group_rank",
     "group_neutralize",
+    "group_rank",
+    "trade_when",
     "sector",
     "industry",
     "subindustry",
-    "cap",
 }
+
+# Alias for backwards compatibility
+KNOWN_OPERATORS = ALLOWED_OPERATORS
 
 # Allowed character set: a-zA-Z0-9_() ,+-*/?<>=!
 ALLOWED_CHARS_SET: set[str] = set(
@@ -40,6 +43,15 @@ ALLOWED_CHARS_SET: set[str] = set(
 
 # Python keywords that must not appear in expressions
 PYTHON_KEYWORDS: set[str] = set(keyword.kwlist)
+
+
+def _is_number(val: str) -> bool:
+    """Check if a string represents a valid integer or float."""
+    try:
+        float(val)
+        return True
+    except ValueError:
+        return False
 
 
 def _check_group_rank_arity(expr: str) -> bool:
@@ -88,22 +100,26 @@ def validate_expression(expr: str) -> tuple[bool, str]:
         if char not in ALLOWED_CHARS_SET:
             return False, "Invalid characters in expression"
 
-    # Strip numeric literals (including scientific notation) before tokenizing identifiers
-    sanitized = re.sub(r"\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b", " ", expr)
+    # Strip numeric literals (including scientific notation like 1e-9) before tokenizing identifiers
+    sanitized = re.sub(r"(?:\b\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?\b", " ", expr)
 
     # Find all identifier tokens
-    identifiers = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", sanitized)
+    words = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", sanitized)
 
     # Check 3: No Python keywords
-    for token in identifiers:
+    for token in words:
         if token in PYTHON_KEYWORDS:
             return False, "Invalid keyword"
 
-    # Check 4: Hallucination check
-    for token in identifiers:
-        if token in KNOWN_OPERATORS or token in ALL_KNOWN_FIELDS:
+    # Check 4: Hard Gate (Hallucination check)
+    for word in words:
+        if _is_number(word):
             continue
-        return False, f"Unknown field: {token}"
+        if word in ALL_KNOWN_FIELDS:
+            continue
+        if word in ALLOWED_OPERATORS:
+            continue
+        return False, f"Hallucinated field/operator: {word}"
 
     # Check 5: Basic arity for group_rank
     if "group_rank" in expr:
