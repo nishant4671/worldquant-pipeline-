@@ -12,7 +12,7 @@ def test_key_rotation_on_429_multi_key(mocker):
     mocker.patch.object(config, "GEMINI_API_KEYS", ["key1", "key2"])
 
     mock_resp = mocker.MagicMock()
-    mock_resp.text = '["rank(close)", "ts_delta(volume, 5)"]'
+    mock_resp.text = '[{"hypothesis": "h1", "expression": "rank(close)", "expected_turnover": "low"}, {"hypothesis": "h2", "expression": "ts_delta(volume, 5)", "expected_turnover": "medium"}]'
 
     mock_generate = mocker.patch.object(
         models.Models,
@@ -34,7 +34,10 @@ def test_key_rotation_on_429_multi_key(mocker):
 
     assert client.current_key_index == 1
     assert client.api_keys[client.current_key_index] == "key2"
-    assert res == ["rank(close)", "ts_delta(volume, 5)"]
+    assert res == [
+        {"hypothesis": "h1", "expression": "rank(close)", "expected_turnover": "low"},
+        {"hypothesis": "h2", "expression": "ts_delta(volume, 5)", "expected_turnover": "medium"},
+    ]
     assert mock_generate.call_count == 2
 
 
@@ -44,7 +47,7 @@ def test_single_key_retry_on_429(mocker):
     mock_sleep = mocker.patch("time.sleep")
 
     mock_resp = mocker.MagicMock()
-    mock_resp.text = '["rank(close)"]'
+    mock_resp.text = '[{"hypothesis": "h1", "expression": "rank(close)", "expected_turnover": "low"}]'
 
     mock_generate = mocker.patch.object(
         models.Models,
@@ -59,7 +62,7 @@ def test_single_key_retry_on_429(mocker):
     res = client.generate_alphas(known_fields={"price_volume": ["close"]}, operators=["rank"])
 
     mock_sleep.assert_called_once_with(60)
-    assert res == ["rank(close)"]
+    assert res == [{"hypothesis": "h1", "expression": "rank(close)", "expected_turnover": "low"}]
     assert mock_generate.call_count == 2
 
 
@@ -68,7 +71,7 @@ def test_json_parsing(mocker):
     mocker.patch.object(config, "GEMINI_API_KEYS", ["key1"])
 
     mock_resp = mocker.MagicMock()
-    mock_resp.text = '```json\n["rank(close)"]\n```'
+    mock_resp.text = '```json\n[{"hypothesis": "test", "expression": "rank(close)", "expected_turnover": "low"}]\n```'
 
     mocker.patch.object(
         models.Models,
@@ -79,7 +82,7 @@ def test_json_parsing(mocker):
     client = LLMClient()
     res = client.generate_alphas(known_fields={"price_volume": ["close"]}, operators=["rank"])
 
-    assert res == ["rank(close)"]
+    assert res == [{"hypothesis": "test", "expression": "rank(close)", "expected_turnover": "low"}]
 
 
 def test_invalid_json_handling(mocker):
@@ -107,11 +110,22 @@ def test_critic_approves(mocker):
     """Test that critique_alphas returns approved list from _call_llm."""
     mocker.patch.object(config, "GEMINI_API_KEYS", ["key1"])
     client = LLMClient()
-    mocker.patch.object(client, "_call_llm", return_value=["rank(close)"])
+    mocker.patch.object(client, "_call_llm", return_value='{"decision": "APPROVE", "critique": "Good"}')
 
     inputs = ["rank(close)", "rank(close) - rank(close)"]
     approved = client.critique_alphas(inputs)
-    assert approved == ["rank(close)"]
+    assert approved == inputs
+
+
+def test_critic_rejects(mocker):
+    """Test that critique_alphas returns empty list when PM Critic rejects."""
+    mocker.patch.object(config, "GEMINI_API_KEYS", ["key1"])
+    client = LLMClient()
+    mocker.patch.object(client, "_call_llm", return_value='{"decision": "REJECT", "critique": "Trivial math"}')
+
+    inputs = ["rank(close)"]
+    approved = client.critique_alphas(inputs)
+    assert approved == []
 
 
 def test_critic_fails_open(mocker):
@@ -129,7 +143,7 @@ def test_advanced_prompt_contains_operators(mocker):
     """Test that generate_alphas includes advanced operators in system prompt."""
     mocker.patch.object(config, "GEMINI_API_KEYS", ["key1"])
     client = LLMClient()
-    mock_call = mocker.patch.object(client, "_call_llm", return_value='["rank(close)"]')
+    mock_call = mocker.patch.object(client, "_call_llm", return_value='[{"hypothesis": "h", "expression": "rank(close)", "expected_turnover": "low"}]')
 
     client.generate_alphas(known_fields={"price_volume": ["close"]})
 

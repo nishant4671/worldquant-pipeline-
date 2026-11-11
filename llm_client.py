@@ -152,14 +152,14 @@ class LLMClient:
         result = self._call_model(prompt=user_prompt, system_prompt=system_prompt)
         return result if result is not None else ""
 
-    def _parse_alphas(self, raw_text: str) -> list[str]:
-        """Parse raw response text into a list of alpha expression strings.
+    def _parse_alphas(self, raw_text: str) -> list[dict]:
+        """Parse raw response text into a list of alpha dictionaries.
 
         Args:
             raw_text: Raw response string from model.
 
         Returns:
-            list[str]: Parsed alpha expression strings.
+            list[dict]: Parsed alpha dictionaries.
 
         Raises:
             ValueError: If parsing fails or output is not a JSON array.
@@ -168,14 +168,20 @@ class LLMClient:
         data = json.loads(cleaned)
         if not isinstance(data, list):
             raise ValueError(f"Expected JSON array, got {type(data).__name__}")
-        return [str(item) for item in data]
+        results: list[dict] = []
+        for item in data:
+            if isinstance(item, dict):
+                results.append(item)
+            elif isinstance(item, str):
+                results.append({"expression": item})
+        return results
 
     def generate_alphas(
         self,
         known_fields: dict[str, list[str]],
         operators: list[str] = DEFAULT_OPERATORS,
         num_alphas: int = 5,
-    ) -> list[str]:
+    ) -> list[dict]:
         """Propose Fast Expression alphas constrained to known fields and operators.
 
         Args:
@@ -185,26 +191,23 @@ class LLMClient:
             num_alphas: Number of alpha expressions to request (default 5).
 
         Returns:
-            list[str]: Generated alpha expression strings.
+            list[dict]: Generated alpha dictionaries.
         """
         if operators is None:
             operators = DEFAULT_OPERATORS
 
         system_prompt = (
-            f"You are an elite quantitative researcher. Propose exactly {num_alphas} unique alpha expressions. "
-            "Use ADVANCED operators whenever possible to avoid correlation and reduce turnover. "
-            "Simple rank(close) alphas are rejected. You MUST use operators like ts_decay_linear, group_neutralize, trade_when, and ts_zscore. "
-            "Mix data categories: Price-Volume, Fundamental, Analyst. "
-            f"You MUST ONLY use fields from this list: {known_fields}. "
-            f"You MUST ONLY use these operators: {operators}. "
-            'Return ONLY a JSON array of strings, e.g. ["ts_decay_linear(rank(close), 5)", "group_neutralize(ts_zscore(volume, 20), sector)"]. '
-            "Do NOT wrap in markdown block or add explanations."
+            "You are a Senior Quantitative Researcher. Generate novel, uncorrelated FASTEXPR alphas. "
+            "Combine Price-Volume with Fundamental data. Use operators like ts_decay_linear, group_neutralize, "
+            "trade_when, ts_zscore. Every alpha must have a clear economic hypothesis. Reject textbook formulas. "
+            "Output a strict JSON array where each object contains: "
+            "{'hypothesis': '...', 'expression': '...', 'expected_turnover': 'low/medium/high'}."
         )
         prompt = f"Propose {num_alphas} unique Fast Expression alphas following the system instructions."
 
         raw_text = self._call_llm(system_prompt=system_prompt, user_prompt=prompt)
         if isinstance(raw_text, list):
-            return [str(item) for item in raw_text]
+            return [item if isinstance(item, dict) else {"expression": str(item)} for item in raw_text]
         if not raw_text:
             return []
 
@@ -215,7 +218,7 @@ class LLMClient:
             # Retry ONCE
             retry_text = self._call_llm(system_prompt=system_prompt, user_prompt=prompt)
             if isinstance(retry_text, list):
-                return [str(item) for item in retry_text]
+                return [item if isinstance(item, dict) else {"expression": str(item)} for item in retry_text]
             if not retry_text:
                 return []
             try:
@@ -224,34 +227,47 @@ class LLMClient:
                 log.error("LLM output invalid JSON on second attempt: %s", retry_parse_err)
                 return []
 
-    def critique_alphas(self, expressions: list[str]) -> list[str]:
+    def critique_alphas(self, expressions: list[Any]) -> list[Any]:
         """Critique and filter candidate alphas using a strict PM persona.
 
         Args:
-            expressions: Candidate Fast Expression strings.
+            expressions: Candidate Fast Expression strings or alpha dicts.
 
         Returns:
-            list[str]: Approved expressions. If parsing fails, returns original
-                input expressions (fail-open).
+            list[Any]: Approved expressions. If rejected, returns empty list.
+                If parsing fails, returns original input expressions (fail-open).
         """
         if not expressions:
             return []
 
         system_prompt = (
-            "You are a strict Quantitative Portfolio Manager. Review the following Fast Expression alphas. "
-            "Veto any that are mathematically trivial, redundant (like adding X and subtracting X), "
-            "or lack economic intuition. Return ONLY a JSON array of the approved expressions. "
-            "Do not include explanations."
+            "You are a ruthless Portfolio Manager. Veto any alpha that is textbook, trivial, or fails to use "
+            "group_neutralize. Reject formulas with excessive turnover. Reject if the hypothesis does not match "
+            "the math. Output a strict JSON object: {'decision': 'APPROVE/REJECT', 'critique': '...'}."
         )
         user_prompt = json.dumps(expressions)
 
         try:
             raw = self._call_llm(system_prompt=system_prompt, user_prompt=user_prompt)
-            if isinstance(raw, list):
-                return [str(item) for item in raw]
-            if not raw or not isinstance(raw, str):
+            if isinstance(raw, dict):
+                data = raw
+            elif isinstance(raw, str):
+                cleaned = _strip_markdown_code_block(raw)
+                data = json.loads(cleaned)
+            else:
                 return expressions
-            return self._parse_alphas(raw)
+
+            if not isinstance(data, dict):
+                return expressions
+
+            decision = str(data.get("decision", "")).strip().upper()
+            critique = str(data.get("critique", "")).strip()
+
+            if decision == "REJECT":
+                log.warning("PM Critic rejected alphas: %s", critique)
+                return []
+
+            return expressions
         except Exception as e:
             log.warning("Critique failed or returned invalid JSON (%s); failing open.", e)
             return expressions
