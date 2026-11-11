@@ -4,7 +4,7 @@ Loads environment variables from .env and exposes typed constants and a
 frozen Settings dataclass. Every module imports settings/constants from here.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -33,6 +33,21 @@ BRAIN_EMAIL: str = _require("BRAIN_EMAIL")
 BRAIN_PASSWORD: str = _require("BRAIN_PASSWORD")
 TELEGRAM_BOT_TOKEN: str = _require("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID: str = _require("TELEGRAM_CHAT_ID")
+
+
+def _load_gemini_api_keys() -> list[str]:
+    """Dynamically load and sort all GEMINI_API_KEY_* environment variables."""
+    keys: list[tuple[int, str]] = []
+    for k, v in os.environ.items():
+        if k.startswith("GEMINI_API_KEY_") and v.strip():
+            suffix = k[len("GEMINI_API_KEY_") :]
+            idx = int(suffix) if suffix.isdigit() else 9999
+            keys.append((idx, v.strip()))
+    keys.sort(key=lambda item: item[0])
+    return [k[1] for k in keys]
+
+
+GEMINI_API_KEYS: list[str] = _load_gemini_api_keys()
 
 # Module-level typed constants
 BRAIN_BASE_URL: str = "https://api.worldquantbrain.com"
@@ -82,6 +97,9 @@ class Settings:
     db_path: Path = DB_PATH
     top_n: int = TOP_N
 
+    # Gemini LLM API keys
+    gemini_api_keys: list[str] = field(default_factory=lambda: list(GEMINI_API_KEYS))
+
     def __getattr__(self, name: str):
         """Allow case-insensitive access (e.g., settings.BRAIN_BASE_URL)."""
         lower = name.lower()
@@ -126,3 +144,4 @@ if __name__ == "__main__":
     print(f"  MAX_TURNOVER:                 {MAX_TURNOVER}")
     print(f"  DB_PATH:                      {DB_PATH}")
     print(f"  TOP_N:                        {TOP_N}")
+    print(f"  GEMINI_API_KEYS:              {[_mask(k) for k in GEMINI_API_KEYS]}")
