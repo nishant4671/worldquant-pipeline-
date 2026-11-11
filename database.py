@@ -120,9 +120,6 @@ def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_alphas_passing ON alphas(passed_filters, notified, sharpe DESC);"
             )
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_alphas_expression_hash ON alphas(expression_hash);"
-            )
 
             # Check if migration is needed for existing tables without expression_hash
             cursor = conn.cursor()
@@ -142,6 +139,10 @@ def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
                 for row in rows:
                     h = hash_expression(row["expression"])
                     conn.execute("UPDATE alphas SET expression_hash = ? WHERE id = ?", (h, row["id"]))
+
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_alphas_expression_hash ON alphas(expression_hash);"
+            )
 
             conn.commit()
 
