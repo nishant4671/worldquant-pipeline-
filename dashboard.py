@@ -7,9 +7,16 @@ golden alphas, and live system pipeline logs.
 
 from datetime import date, datetime
 import json
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 import pandas as pd
 import plotly.express as px
@@ -58,6 +65,54 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+# --- Authentication Gate ---
+def check_password() -> bool:
+    """Validate user password against the UI_PASSWORD environment variable."""
+    expected_password = os.environ.get("UI_PASSWORD")
+
+    # If UI_PASSWORD is not configured, block access
+    if not expected_password:
+        st.error("⚠️ `UI_PASSWORD` environment variable is not configured on the server.")
+        st.info(
+            "Please set `UI_PASSWORD=your_password` in `.env` or the environment, then restart the dashboard."
+        )
+        st.stop()
+        return False
+
+    # Check if already authenticated in this session
+    if st.session_state.get("authenticated", False):
+        return True
+
+    # Render login form
+    st.markdown('<div class="main-header">🔒 WorldQuant BRAIN Dashboard</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="sub-header">Please authenticate to access the quantitative surveillance console.</div>',
+        unsafe_allow_html=True,
+    )
+
+    col1, _ = st.columns([1, 2])
+    with col1:
+        with st.form("login_form"):
+            password_input = st.text_input("Enter Dashboard Password", type="password")
+            submitted = st.form_submit_button("Log In", use_container_width=True)
+
+            if submitted:
+                if password_input == expected_password:
+                    st.session_state["authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("❌ Incorrect password. Access denied.")
+                    st.stop()
+
+    st.stop()
+    return False
+
+
+if not check_password():
+    st.stop()
+
 
 
 # --- Data Access Functions ---
@@ -133,6 +188,10 @@ st.sidebar.markdown(f"**Database:** `{DB_PATH.resolve().name}`")
 
 if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
     st.cache_data.clear()
+    st.rerun()
+
+if st.sidebar.button("🚪 Log Out", use_container_width=True):
+    st.session_state["authenticated"] = False
     st.rerun()
 
 st.sidebar.markdown("---")
