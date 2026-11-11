@@ -10,6 +10,7 @@ import main
 def test_pipeline_mock_executes_flow(mocker, tmp_path):
     """Test that pipeline --mock executes the full flow end-to-end without errors."""
     mock_init_db = mocker.patch("database.init_db")
+    mock_near_misses = mocker.patch("database.get_near_misses", return_value=[])
     mock_send_digest = mocker.patch("notifier.send_digest", return_value=[123])
 
     # Mock engine run_batch to return a passed alpha result
@@ -28,6 +29,7 @@ def test_pipeline_mock_executes_flow(mocker, tmp_path):
 
     assert exit_code == 0
     assert mock_init_db.called
+    mock_near_misses.assert_called_once_with(limit=3)
     mock_run_batch.assert_called_once()
     mock_send_digest.assert_called_once()
 
@@ -35,6 +37,7 @@ def test_pipeline_mock_executes_flow(mocker, tmp_path):
 def test_pipeline_zero_proposed_exits_gracefully(mocker):
     """Test that when 0 alphas are proposed, the pipeline terminates cleanly without error."""
     mocker.patch("database.init_db")
+    mocker.patch("database.get_near_misses", return_value=[])
     mocker.patch.object(main.MockLLMClient, "generate_alphas", return_value=[])
     mock_run_batch = mocker.patch("engine.AlphaEngine.run_batch")
 
@@ -49,6 +52,7 @@ def test_pipeline_zero_proposed_exits_gracefully(mocker):
 def test_pipeline_all_rejected_exits_gracefully(mocker):
     """Test that when all proposed alphas fail static validation, the pipeline exits gracefully."""
     mocker.patch("database.init_db")
+    mocker.patch("database.get_near_misses", return_value=[])
     mocker.patch(
         "validator.validate_batch",
         return_value=([], [({"expression": "invalid_expr"}, "Unknown field")]),
@@ -66,6 +70,7 @@ def test_pipeline_all_rejected_exits_gracefully(mocker):
 def test_pipeline_all_vetoed_exits_gracefully(mocker):
     """Test that when PM Critic vetoes all alphas, the pipeline exits gracefully."""
     mocker.patch("database.init_db")
+    mocker.patch("database.get_near_misses", return_value=[])
     mocker.patch.object(main.MockLLMClient, "critique_alphas", return_value=[])
     mock_run_batch = mocker.patch("engine.AlphaEngine.run_batch")
 

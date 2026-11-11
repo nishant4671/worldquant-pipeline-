@@ -318,6 +318,36 @@ def list_passing(limit: int = 4, db_path: Path | str | None = None) -> list[dict
         return [dict(row) for row in cursor.fetchall()]
 
 
+def get_near_misses(limit: int = 3, db_path: Path | str | None = None) -> list[dict[str, Any]]:
+    """Return alphas that failed quality gates but were near misses on Sharpe or Fitness.
+
+    Args:
+        limit: Maximum number of records to return (default 3).
+        db_path: Optional path to the database file.
+
+    Returns:
+        list[dict[str, Any]]: List of dictionary alpha records.
+    """
+    target = _ensure_db(db_path)
+    with connect(target) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM alphas
+            WHERE passed_filters = 0
+              AND (
+                (sharpe >= 1.0 AND sharpe <= 1.24)
+                OR
+                (fitness >= 0.8 AND fitness <= 0.99)
+              )
+            ORDER BY sharpe DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
 def mark_notified(alpha_id: str, db_path: Path | str | None = None) -> None:
     """Mark an alpha as notified.
 

@@ -42,6 +42,7 @@ class MockLLMClient:
         known_fields: dict[str, list[str]],
         operators: list[str],
         num_alphas: int = 5,
+        near_misses: list[dict] | None = None,
     ) -> list[dict]:
         """Propose canned valid alpha expressions for mock runs."""
         sample_fields = ["close", "volume", "open", "high", "low", "returns"]
@@ -181,8 +182,13 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
         client = BrainClient()
         llm_client = LLMClient()
 
+    near_misses = database.get_near_misses(limit=3)
+    log.info("Found %d near-miss alphas for mutation feedback.", len(near_misses))
+
     log.info("Step 3: Proposing %d Fast Expressions via LLM...", args.n)
-    proposed = llm_client.generate_alphas(KNOWN_FIELDS, FAST_EXPR_OPERATORS, num_alphas=args.n)
+    proposed = llm_client.generate_alphas(
+        KNOWN_FIELDS, FAST_EXPR_OPERATORS, num_alphas=args.n, near_misses=near_misses
+    )
     if not proposed:
         log.warning("No alphas proposed by LLM. Exiting pipeline gracefully.")
         print("Pipeline finished: 0 alphas proposed.")

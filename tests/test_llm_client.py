@@ -154,3 +154,33 @@ def test_advanced_prompt_contains_operators(mocker):
     assert "ts_decay_linear" in system_prompt
     assert "group_neutralize" in system_prompt
 
+
+def test_prompt_includes_near_misses(mocker):
+    """Test that generate_alphas includes near-miss feedback in user prompt when provided."""
+    mocker.patch.object(config, "GEMINI_API_KEYS", ["key1"])
+    client = LLMClient()
+    mock_call = mocker.patch.object(
+        client,
+        "_call_llm",
+        return_value='[{"hypothesis": "h", "expression": "rank(close)", "expected_turnover": "low"}]',
+    )
+
+    near_misses = [
+        {"alpha_id": "nm1", "expression": "rank(close - open)", "sharpe": 1.15},
+        {"alpha_id": "nm2", "expression": "ts_rank(sales, 60)", "fitness": 0.85},
+    ]
+
+    client.generate_alphas(
+        known_fields={"price_volume": ["close"]},
+        near_misses=near_misses,
+    )
+
+    assert mock_call.called
+    kwargs = mock_call.call_args.kwargs
+    args = mock_call.call_args.args
+    user_prompt = kwargs.get("user_prompt") or (args[1] if len(args) > 1 else "")
+    assert "Yesterday, these alphas almost passed:" in user_prompt
+    assert "rank(close - open)" in user_prompt
+    assert "ts_rank(sales, 60)" in user_prompt
+
+

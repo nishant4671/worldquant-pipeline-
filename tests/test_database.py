@@ -289,3 +289,48 @@ def test_structural_deduplication(tmp_path):
 
     assert expression_exists("ts_rank(close, 60)", db_path=db_file) is True
 
+
+def test_get_near_misses(tmp_path):
+    """Ensure get_near_misses returns only failing alphas meeting near-miss criteria."""
+    db_file = tmp_path / "test_near_misses.db"
+
+    # Passing alpha
+    database.insert_alpha(
+        {
+            "alpha_id": "alpha_passing",
+            "expression": "rank(close)",
+            "sharpe": 1.5,
+            "fitness": 1.1,
+            "passed_filters": 1,
+        },
+        db_path=db_file,
+    )
+    # Complete fail (Sharpe 0.5, Fitness 0.3)
+    database.insert_alpha(
+        {
+            "alpha_id": "alpha_failed",
+            "expression": "rank(volume)",
+            "sharpe": 0.5,
+            "fitness": 0.3,
+            "passed_filters": 0,
+        },
+        db_path=db_file,
+    )
+    # Near miss (Sharpe 1.15)
+    database.insert_alpha(
+        {
+            "alpha_id": "alpha_near_miss",
+            "expression": "rank(open)",
+            "sharpe": 1.15,
+            "fitness": 0.7,
+            "passed_filters": 0,
+        },
+        db_path=db_file,
+    )
+
+    near_misses = database.get_near_misses(limit=3, db_path=db_file)
+    assert len(near_misses) == 1
+    assert near_misses[0]["alpha_id"] == "alpha_near_miss"
+    assert near_misses[0]["sharpe"] == 1.15
+
+

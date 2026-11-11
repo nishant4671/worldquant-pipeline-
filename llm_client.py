@@ -181,6 +181,7 @@ class LLMClient:
         known_fields: dict[str, list[str]],
         operators: list[str] = DEFAULT_OPERATORS,
         num_alphas: int = 5,
+        near_misses: list[dict] | None = None,
     ) -> list[dict]:
         """Propose Fast Expression alphas constrained to known fields and operators.
 
@@ -189,6 +190,7 @@ class LLMClient:
             operators: List of allowed mathematical/time-series operators. Defaults
                 to DEFAULT_OPERATORS including advanced operators.
             num_alphas: Number of alpha expressions to request (default 5).
+            near_misses: Optional list of near-miss alpha dictionaries from previous runs.
 
         Returns:
             list[dict]: Generated alpha dictionaries.
@@ -204,6 +206,16 @@ class LLMClient:
             "{'hypothesis': '...', 'expression': '...', 'expected_turnover': 'low/medium/high'}."
         )
         prompt = f"Propose {num_alphas} unique Fast Expression alphas following the system instructions."
+
+        if near_misses:
+            miss_lines = "\n".join(
+                f"- {item.get('expression', str(item)) if isinstance(item, dict) else str(item)}"
+                for item in near_misses
+            )
+            prompt += (
+                f"\n\nYesterday, these alphas almost passed:\n{miss_lines}\n"
+                "Propose 3 new alphas that mutate these ideas (e.g., change the window, add decay, or change neutralization) to push them over the threshold."
+            )
 
         raw_text = self._call_llm(system_prompt=system_prompt, user_prompt=prompt)
         if isinstance(raw_text, list):
