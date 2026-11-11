@@ -4,3 +4,10 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+pipeline.log
+cron.log
+listener_watchdog.log
+alphas.db
+*.db
+
