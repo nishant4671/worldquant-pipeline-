@@ -80,3 +80,47 @@ def test_pipeline_all_vetoed_exits_gracefully(mocker):
 
     assert exit_code == 0
     mock_run_batch.assert_not_called()
+
+
+def test_pipeline_logs_validator_rejection_event(mocker):
+    """Verify that validator rejections trigger log_event with component='Validator'."""
+    mocker.patch("database.init_db")
+    mocker.patch("database.get_near_misses", return_value=[])
+    mock_log_event = mocker.patch("database.log_event")
+    mocker.patch(
+        "validator.validate_batch",
+        return_value=(
+            [],
+            [({"expression": "rank(fake_field)"}, "Hallucinated field/operator: fake_field")],
+        ),
+    )
+    mocker.patch.object(sys, "argv", ["main.py", "pipeline", "1", "--mock"])
+
+    exit_code = main.main()
+
+    assert exit_code == 0
+    mock_log_event.assert_called_once()
+    kwargs = mock_log_event.call_args.kwargs
+    assert kwargs["component"] == "Validator"
+    assert kwargs["status"] == "REJECTED"
+    assert "fake_field" in kwargs["reason"]
+
+
+def test_pipeline_logs_critic_rejection_event(mocker):
+    """Verify that PM critic rejections trigger log_event with component='Critic'."""
+    mocker.patch("database.init_db")
+    mocker.patch("database.get_near_misses", return_value=[])
+    mock_log_event = mocker.patch("database.log_event")
+    mocker.patch.object(main.MockLLMClient, "critique_alphas", return_value=[])
+    mocker.patch.object(sys, "argv", ["main.py", "pipeline", "2", "--mock"])
+
+    exit_code = main.main()
+
+    assert exit_code == 0
+    assert mock_log_event.call_count >= 1
+    call_kwargs = [call.kwargs for call in mock_log_event.call_args_list]
+    assert any(
+        kw.get("component") == "Critic" and kw.get("status") == "REJECTED"
+        for kw in call_kwargs
+    )
+

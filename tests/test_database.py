@@ -334,3 +334,61 @@ def test_get_near_misses(tmp_path):
     assert near_misses[0]["sharpe"] == 1.15
 
 
+def test_events_table_schema(tmp_path):
+    """Verify events table and columns are properly created during init_db."""
+    db_file = tmp_path / "test_events_schema.db"
+    database.init_db(db_file)
+
+    conn = sqlite3.connect(str(db_file))
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(events)")
+    columns = {row[1] for row in cursor.fetchall()}
+    conn.close()
+
+    expected = {"id", "timestamp", "component", "status", "reason", "alpha_id"}
+    assert expected.issubset(columns)
+
+
+def test_log_event_and_get_events(tmp_path):
+    """Verify logging events and querying them with filters."""
+    db_file = tmp_path / "test_events.db"
+
+    database.log_event(
+        component="Validator",
+        status="REJECTED",
+        reason="Hallucinated field/operator: fake_volume",
+        alpha_id=None,
+        db_path=db_file,
+    )
+    database.log_event(
+        component="Critic",
+        status="REJECTED",
+        reason="Rejected by Critic: rank(close)",
+        alpha_id="A001",
+        db_path=db_file,
+    )
+    database.log_event(
+        component="Proposer",
+        status="SUCCESS",
+        reason="Generated 5 alphas",
+        db_path=db_file,
+    )
+
+    all_events = database.get_events(db_path=db_file)
+    assert len(all_events) == 3
+
+    validator_events = database.get_events(component="Validator", db_path=db_file)
+    assert len(validator_events) == 1
+    assert validator_events[0]["component"] == "Validator"
+    assert validator_events[0]["status"] == "REJECTED"
+    assert "fake_volume" in validator_events[0]["reason"]
+    assert validator_events[0]["alpha_id"] is None
+
+    critic_events = database.get_events(component="Critic", db_path=db_file)
+    assert len(critic_events) == 1
+    assert critic_events[0]["component"] == "Critic"
+    assert critic_events[0]["status"] == "REJECTED"
+    assert critic_events[0]["alpha_id"] == "A001"
+
+
+

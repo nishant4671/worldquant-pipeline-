@@ -43,10 +43,32 @@ The **WorldQuant BRAIN Autonomous Alpha Pipeline** provides an automated, resili
 
 ---
 
+## Documentation
+
+Comprehensive enterprise documentation is maintained in the [`docs/`](docs/) directory:
+
+| Document | Description |
+|---|---|
+| [System Architecture](docs/ARCHITECTURE.md) | High-level system design, separation of concerns, and Mermaid data flow. |
+| [API Reference](docs/API_REFERENCE.md) | WorldQuant REST endpoints and complete Python function signatures. |
+| [Quantitative Strategy](docs/QUANT_STRATEGY.md) | Alpha ideation philosophy, Proposer/Critic prompts, field quarantine, and quality gates. |
+| [Server Deployment](docs/DEPLOYMENT.md) | Azure Ubuntu production deployment, systemd service, cron scheduling, and log management. |
+| [Testing Strategy](docs/TESTING.md) | `pytest-mock` simulation of API errors and LLM hallucinations, test suite inventory. |
+| [Contributing & Rules](docs/CONTRIBUTING.md) | Rules of engagement, API key security, concurrency limits, and PR standards. |
+
+---
+
 ## Directory Structure
 
 ```text
 worldquant-pipeline/
+├── docs/                  # Enterprise-grade technical and operational documentation
+│   ├── ARCHITECTURE.md    # System design, separation of concerns & Mermaid data flow
+│   ├── API_REFERENCE.md   # WorldQuant REST API & internal Python interface signatures
+│   ├── QUANT_STRATEGY.md  # Alpha generation logic, LLM prompts & quality gates
+│   ├── DEPLOYMENT.md      # Azure Ubuntu server, systemd listener & cron automation
+│   ├── TESTING.md         # Unit testing strategy, pytest-mock & failure simulation
+│   └── CONTRIBUTING.md    # Team rules of engagement, code style & PR checklist
 ├── api_client.py          # Thread-safe WorldQuant BRAIN REST client (auth, retry, backoff)
 ├── config.py              # Environment configuration, pydantic settings, dynamic key loader
 ├── database.py            # SQLite schema, migration, SHA-256 deduplication, query layer
@@ -58,7 +80,7 @@ worldquant-pipeline/
 ├── validator.py           # Hard Gatekeeper: static AST & regex FASTEXPR validator
 ├── run_listener.vbs       # Silent background daemon runner for Windows
 ├── watchdog_listener.ps1  # Auto-recovery health-check script for Task Scheduler
-├── DEPLOYMENT.md          # Comprehensive daemon and task scheduling documentation
+├── DEPLOYMENT.md          # Windows Task Scheduler deployment documentation
 ├── requirements.txt       # Production dependencies
 └── tests/                 # Comprehensive test suite (85+ passing tests)
 ```
@@ -167,18 +189,14 @@ python main.py simulate 10
 
 ## Deployment & 24/7 Automation
 
-For hands-off overnight operation on Windows:
-- **Silent Background Daemon**: Launch `run_listener.vbs` to execute `pythonw.exe main.py listen` with no console window.
-- **Watchdog Recovery**: Schedule `watchdog_listener.ps1` in Windows Task Scheduler every 15 minutes to guarantee listener uptime.
-- **Overnight Discovery**: Schedule `python main.py pipeline 50` daily at 2:00 AM.
-
-Refer to [DEPLOYMENT.md](DEPLOYMENT.md) for step-by-step Task Scheduler instructions and CLI automation commands.
+- **Azure Ubuntu Production**: Run the Telegram listener as an isolated `systemd` daemon and schedule nightly discovery via `cron`. Refer to [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for full server provisioning, logrotate, and monitoring setup.
+- **Windows Desktop / Local**: Launch `run_listener.vbs` to execute `pythonw.exe main.py listen` silently, backed by `watchdog_listener.ps1` in Task Scheduler. Refer to [DEPLOYMENT.md](DEPLOYMENT.md) for local Windows Task Scheduler instructions.
 
 ---
 
 ## Testing
 
-The codebase includes comprehensive unit and integration tests covering API retries, circuit breaking, SQLite migrations, static AST linting, prompt structuring, and Telegram interactions.
+The codebase includes comprehensive unit and integration tests covering API retries, circuit breaking, SQLite migrations, static AST linting, prompt structuring, and Telegram interactions. Refer to [docs/TESTING.md](docs/TESTING.md) for the complete testing strategy.
 
 Run the test suite:
 ```bash

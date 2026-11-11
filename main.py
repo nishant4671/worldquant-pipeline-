@@ -202,7 +202,14 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
             if isinstance(rej_item, dict)
             else str(rej_item)
         )
+        alpha_id = rej_item.get("alpha_id") if isinstance(rej_item, dict) else None
         log.warning("Validator rejected '%s': %s", rej_expr, reason)
+        database.log_event(
+            component="Validator",
+            status="REJECTED",
+            reason=f"{reason}: {rej_expr}" if rej_expr else reason,
+            alpha_id=alpha_id,
+        )
 
     if not valid_exprs:
         log.warning("All proposed alphas were rejected by validator. Exiting pipeline gracefully.")
@@ -211,6 +218,17 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
 
     log.info("Step 5: Passing %d valid expressions to Portfolio Manager Critic...", len(valid_exprs))
     approved = llm_client.critique_alphas(valid_exprs)
+    rejected_by_critic = [a for a in valid_exprs if a not in approved]
+    for alpha in rejected_by_critic:
+        expr = alpha.get("expression", str(alpha)) if isinstance(alpha, dict) else str(alpha)
+        alpha_id = alpha.get("alpha_id") if isinstance(alpha, dict) else None
+        database.log_event(
+            component="Critic",
+            status="REJECTED",
+            reason=f"Rejected by Critic: {expr}" if expr else "Rejected by Critic",
+            alpha_id=alpha_id,
+        )
+
     if not approved:
         log.warning("No alphas approved by PM Critic. Exiting pipeline gracefully.")
         print("Pipeline finished: 0 approved alphas remaining.")

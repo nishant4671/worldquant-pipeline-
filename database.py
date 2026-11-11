@@ -136,6 +136,25 @@ def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_alphas_passing ON alphas(passed_filters, notified, sharpe DESC);"
             )
 
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    component TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    reason TEXT,
+                    alpha_id TEXT
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_component ON events(component);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_status ON events(status);"
+            )
+
             # Check if migration is needed for existing tables without expression_hash or structural_hash
             cursor = conn.cursor()
             cursor.execute("PRAGMA table_info(alphas)")
@@ -405,3 +424,132 @@ def summary(db_path: Path | str | None = None) -> dict[str, int]:
             "notified": int(row["notified"]),
             "submitted": int(row["submitted"]),
         }
+
+
+def log_event(
+    component: str,
+    status: str,
+    reason: str | None = None,
+    alpha_id: str | None = None,
+    timestamp: str | None = None,
+    db_path: Path | str | None = None,
+) -> None:
+    """Log a pipeline event to the events table.
+
+    Args:
+        component: Pipeline component (e.g. 'Proposer', 'Critic', 'Validator', 'Engine').
+        status: Event status (e.g. 'SUCCESS', 'REJECTED', 'ERROR').
+        reason: Optional description or rejection reason.
+        alpha_id: Optional alpha identifier.
+        timestamp: Optional ISO 8601 timestamp string (defaults to current UTC time).
+        db_path: Optional path to the database file.
+    """
+    target = _ensure_db(db_path)
+    if not timestamp:
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+    try:
+        with connect(target) as conn:
+            conn.execute(
+                """
+                INSERT INTO events (timestamp, component, status, reason, alpha_id)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (timestamp, component, status, reason, alpha_id),
+            )
+            conn.commit()
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e).lower():
+            with connect(target) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        component TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        reason TEXT,
+                        alpha_id TEXT
+                    );
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO events (timestamp, component, status, reason, alpha_id)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (timestamp, component, status, reason, alpha_id),
+                )
+                conn.commit()
+        else:
+            raise
+
+
+def insert_event(
+    event: dict[str, Any] | None = None,
+    *,
+    component: str | None = None,
+    status: str | None = None,
+    reason: str | None = None,
+    alpha_id: str | None = None,
+    timestamp: str | None = None,
+    db_path: Path | str | None = None,
+) -> None:
+    """Insert an event into the events table from a dictionary or keyword arguments."""
+    if event:
+        component = event.get("component", component or "")
+        status = event.get("status", status or "")
+        reason = event.get("reason", reason)
+        alpha_id = event.get("alpha_id", alpha_id)
+        timestamp = event.get("timestamp", timestamp)
+        db_path = event.get("db_path", db_path)
+    log_event(
+        component=component or "",
+        status=status or "",
+        reason=reason,
+        alpha_id=alpha_id,
+        timestamp=timestamp,
+        db_path=db_path,
+    )
+
+
+def get_events(
+    component: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+    db_path: Path | str | None = None,
+) -> list[dict[str, Any]]:
+    """Retrieve logged events from the events table.
+
+    Args:
+        component: Optional component filter ('Proposer', 'Critic', 'Validator', 'Engine').
+        status: Optional status filter ('SUCCESS', 'REJECTED', 'ERROR').
+        limit: Maximum number of events to return (default 100).
+        db_path: Optional path to the database file.
+
+    Returns:
+        list[dict[str, Any]]: List of event records as dictionaries.
+    """
+    target = _ensure_db(db_path)
+    query = "SELECT * FROM events"
+    conditions = []
+    params: list[Any] = []
+
+    if component:
+        conditions.append("component = ?")
+        params.append(component)
+    if status:
+        conditions.append("status = ?")
+        params.append(status)
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+
+    with connect(target) as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, tuple(params))
+        return [dict(row) for row in cursor.fetchall()]
+
