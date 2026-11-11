@@ -1,8 +1,8 @@
-"""WorldQuant BRAIN Alpha Pipeline - Streamlit Monitoring Dashboard.
+"""WorldQuant BRAIN Alpha Pipeline - Streamlit Monitoring Command Centre.
 
-Provides a read-only dark-themed operational interface to monitor
-alpha simulations, quality funnels, the graveyard of rejections,
-golden alphas, and live system pipeline logs.
+Provides a read-only dark-themed operational command centre to monitor
+alpha simulations, quality funnels, brain analytics, performance landscape,
+near misses, the graveyard of rejections, golden alphas, and system health.
 """
 
 from datetime import date, datetime
@@ -27,7 +27,7 @@ LOG_PATH = Path("pipeline.log")
 
 # --- Page Configuration & Dark Theme Styling ---
 st.set_page_config(
-    page_title="WorldQuant BRAIN Dashboard",
+    page_title="WorldQuant BRAIN Command Centre",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -42,12 +42,12 @@ st.markdown(
         color: #e0e0e0;
     }
     div[data-testid="stMetricValue"] {
-        font-size: 2rem;
+        font-size: 1.8rem;
         font-weight: 700;
         color: #00d26a;
     }
     div[data-testid="stMetricLabel"] {
-        font-size: 0.9rem;
+        font-size: 0.85rem;
         color: #a0aec0;
     }
     .main-header {
@@ -59,7 +59,14 @@ st.markdown(
     .sub-header {
         font-size: 1rem;
         color: #718096;
-        margin-bottom: 1.5rem;
+        margin-bottom: 1.2rem;
+    }
+    .alpha-card {
+        background-color: #1a202c;
+        border: 1px solid #2d3748;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 1rem;
     }
     </style>
     """,
@@ -86,7 +93,7 @@ def check_password() -> bool:
         return True
 
     # Render login form
-    st.markdown('<div class="main-header">🔒 WorldQuant BRAIN Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🔒 WorldQuant BRAIN Command Centre</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="sub-header">Please authenticate to access the quantitative surveillance console.</div>',
         unsafe_allow_html=True,
@@ -113,6 +120,36 @@ def check_password() -> bool:
 if not check_password():
     st.stop()
 
+
+# --- System Health Banner ---
+def show_system_health_banner() -> None:
+    """Parse last 100 lines of pipeline.log to display real-time operational status."""
+    if not LOG_PATH.exists():
+        st.info("ℹ️ **System Status**: `pipeline.log` not found. No recent executions logged.")
+        return
+
+    try:
+        with open(LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        recent_lines = lines[-100:] if len(lines) >= 100 else lines
+        recent_text = "".join(recent_lines)
+
+        has_error = any("ERROR" in line or "429" in line for line in recent_lines)
+        has_success = any(
+            "pipeline finished successfully" in line.lower()
+            or "pipeline finished" in line.lower()
+            or "simulation completed" in line.lower()
+            for line in recent_lines
+        )
+
+        if has_error:
+            st.error("🚨 **System Alert**: Errors or HTTP 429 rate limits detected in the last 100 log lines! Inspect the System Logs tab.")
+        elif has_success:
+            st.success("✅ **System Healthy**: Pipeline finished successfully.")
+        else:
+            st.info("ℹ️ **System Status**: Pipeline is idle or in-progress. No errors detected.")
+    except Exception as err:
+        st.warning(f"Unable to inspect pipeline health logs: {err}")
 
 
 # --- Data Access Functions ---
@@ -179,6 +216,26 @@ def extract_hypothesis(raw_response_str: Any) -> str:
     return "N/A"
 
 
+def diagnose_alpha(row: pd.Series) -> str:
+    """Diagnose why an alpha failed quality filters despite having Sharpe >= 1.0."""
+    issues = []
+    fitness = row.get("fitness")
+    sharpe = row.get("sharpe")
+    turnover = row.get("turnover")
+
+    if pd.notna(fitness) and fitness < 1.0:
+        issues.append("Needs lower turnover (Fitness < 1.0)")
+    if pd.notna(sharpe) and sharpe < 1.25:
+        issues.append("Sharpe marginal (1.00 - 1.24, target >= 1.25)")
+    if pd.notna(turnover):
+        if turnover > 0.70:
+            issues.append("Excessive turnover (> 70%)")
+        elif turnover < 0.01:
+            issues.append("Turnover too low (< 1%)")
+
+    return "; ".join(issues) if issues else "Sub-threshold criteria"
+
+
 # --- Load Data ---
 df_alphas, df_events = load_data(str(DB_PATH))
 
@@ -239,10 +296,12 @@ if not df_events.empty and "timestamp_dt" in df_events.columns:
 else:
     filtered_events = df_events.copy()
 
-# --- Header ---
-st.markdown('<div class="main-header">⚡ WorldQuant BRAIN Alpha Dashboard</div>', unsafe_allow_html=True)
+# --- Top Banner & Header ---
+show_system_health_banner()
+
+st.markdown('<div class="main-header">⚡ WorldQuant BRAIN Command Centre</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-header">Real-time surveillance of quantitative generation, rejection funnels, and quality metrics</div>',
+    '<div class="sub-header">Executive surveillance of quantitative alpha pipeline, quality gates, and failure diagnostics</div>',
     unsafe_allow_html=True,
 )
 
@@ -271,20 +330,21 @@ col4.metric("Yield Rate", f"{yield_rate:.1f}%")
 st.markdown("---")
 
 # --- Tabs ---
-tab1, tab2, tab3, tab4 = st.tabs(
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
     [
-        "📊 The Funnel",
+        "📊 The Funnel & Analytics",
         "🏆 Golden Alphas",
+        "🎯 Near Misses",
         "🪦 The Graveyard (Rejections)",
         "📜 System Logs",
     ]
 )
 
-# --- Tab 1: The Funnel ---
+# --- Tab 1: The Funnel & Analytics ---
 with tab1:
-    st.subheader("Alpha Generation Pipeline Funnel")
+    st.subheader("Pipeline Quality Funnel")
     st.caption(
-        "Progression from raw LLM proposals through Critic vetoes and static linting to simulated Golden Alphas."
+        "Candidate progression from initial Fast Expression proposal through PM Critic and static validation to golden quality status."
     )
 
     validator_rejections = (
@@ -330,22 +390,140 @@ with tab1:
         }
     )
 
-    fig = px.funnel(
+    fig_funnel = px.funnel(
         funnel_df,
         x="Count",
         y="Stage",
         color="Stage",
         color_discrete_sequence=["#6366f1", "#3b82f6", "#10b981", "#f59e0b"],
     )
-    fig.update_layout(
+    fig_funnel.update_layout(
         template="plotly_dark",
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=40, r=40, t=30, b=30),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig_funnel, use_container_width=True)
 
-# --- Tab 2: Golden Alphas ---
+    st.markdown("---")
+
+    # Item 2: Brain Analytics Chart (Critic/Validator rejections by reason)
+    st.subheader("🧠 Brain Analytics: Rejection Breakdown")
+    st.caption("Distribution of failure reasons identified by static validation linting and portfolio manager critique.")
+
+    if not graveyard_df.empty and "reason" in graveyard_df.columns:
+        reason_summary = (
+            graveyard_df.groupby(["component", "reason"])
+            .size()
+            .reset_index(name="Count")
+            .sort_values(by="Count", ascending=True)
+        )
+
+        fig_reasons = px.bar(
+            reason_summary,
+            x="Count",
+            y="reason",
+            color="component",
+            orientation="h",
+            title="Breakdown of Rejections by Gatekeeper & Reason",
+            labels={"reason": "Rejection Reason", "Count": "Count", "component": "Gatekeeper"},
+            color_discrete_map={"Validator": "#f87171", "Critic": "#fb923c"},
+        )
+        fig_reasons.update_layout(
+            template="plotly_dark",
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=40, r=40, t=40, b=30),
+        )
+        st.plotly_chart(fig_reasons, use_container_width=True)
+    else:
+        st.info("No rejection records available for Brain Analytics breakdown.")
+
+    st.markdown("---")
+
+    # Item 3: Performance Scatter Plot (Sharpe vs. Turnover with Golden Zone)
+    st.subheader("🎯 Performance Landscape: Sharpe vs. Turnover")
+    st.caption("Golden Zone defined by Sharpe >= 1.25 and Turnover between 0.01 (1%) and 0.70 (70%).")
+
+    if (
+        not filtered_alphas.empty
+        and "turnover" in filtered_alphas.columns
+        and "sharpe" in filtered_alphas.columns
+    ):
+        scatter_df = filtered_alphas.dropna(subset=["turnover", "sharpe"]).copy()
+        if not scatter_df.empty:
+            scatter_df["Status"] = scatter_df["passed_filters"].apply(
+                lambda p: "Passed (Golden)" if p == 1 else "Failed Filters"
+            )
+
+            hover_cols = [
+                c
+                for c in ["alpha_id", "expression", "fitness"]
+                if c in scatter_df.columns
+            ]
+
+            fig_scatter = px.scatter(
+                scatter_df,
+                x="turnover",
+                y="sharpe",
+                color="Status",
+                color_discrete_map={
+                    "Passed (Golden)": "#00d26a",
+                    "Failed Filters": "#f87171",
+                },
+                hover_data=hover_cols,
+                title="Sharpe Ratio vs. Turnover Landscape",
+                labels={"turnover": "Turnover", "sharpe": "Sharpe Ratio"},
+            )
+
+            # Quality gate threshold lines
+            fig_scatter.add_vline(
+                x=0.01,
+                line_dash="dash",
+                line_color="#38bdf8",
+                annotation_text="Min Turnover (0.01)",
+            )
+            fig_scatter.add_vline(
+                x=0.70,
+                line_dash="dash",
+                line_color="#38bdf8",
+                annotation_text="Max Turnover (0.70)",
+            )
+            fig_scatter.add_hline(
+                y=1.25,
+                line_dash="dash",
+                line_color="#facc15",
+                annotation_text="Min Sharpe (1.25)",
+            )
+
+            # Golden Zone shaded box
+            max_sharpe = max(2.5, scatter_df["sharpe"].max() + 0.3)
+            fig_scatter.add_hrect(
+                y0=1.25,
+                y1=max_sharpe,
+                x0=0.01,
+                x1=0.70,
+                fillcolor="#00d26a",
+                opacity=0.08,
+                line_width=0,
+                annotation_text="Golden Zone",
+                annotation_position="top left",
+            )
+
+            fig_scatter.update_layout(
+                template="plotly_dark",
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                margin=dict(l=40, r=40, t=40, b=30),
+            )
+            st.plotly_chart(fig_scatter, use_container_width=True)
+        else:
+            st.info("No numeric simulation metrics available for the performance scatter plot.")
+    else:
+        st.info("Simulated alphas data not available.")
+
+
+# --- Tab 2: Golden Alphas (Cards with Copyable Code) ---
 with tab2:
     st.subheader("Golden Alphas (Passed Quality Filters)")
     st.caption(
@@ -355,31 +533,83 @@ with tab2:
     if golden_alphas_df.empty:
         st.info("No golden alphas recorded for the selected date range.")
     else:
-        if "raw_response" in golden_alphas_df.columns:
-            golden_alphas_df["Hypothesis"] = golden_alphas_df["raw_response"].apply(
-                extract_hypothesis
-            )
-        else:
-            golden_alphas_df["Hypothesis"] = "N/A"
+        st.markdown(f"**Found {len(golden_alphas_df)} Golden Alpha(s)**")
+        for idx, row in golden_alphas_df.iterrows():
+            alpha_id = row.get("alpha_id", f"Alpha #{idx}")
+            expr = str(row.get("expression", ""))
+            sharpe = row.get("sharpe")
+            fitness = row.get("fitness")
+            turnover = row.get("turnover")
+            raw_resp = row.get("raw_response")
+            hypothesis = extract_hypothesis(raw_resp)
+
+            with st.container():
+                st.markdown(f"### 🏆 `{alpha_id}`")
+                st.code(expr, language="text")
+
+                c1, c2, c3, c4 = st.columns([1, 1, 1, 3])
+                c1.metric("Sharpe", f"{sharpe:.2f}" if pd.notna(sharpe) else "N/A")
+                c2.metric("Fitness", f"{fitness:.2f}" if pd.notna(fitness) else "N/A")
+                c3.metric(
+                    "Turnover",
+                    f"{turnover:.1%}" if pd.notna(turnover) else "N/A",
+                )
+                with c4:
+                    st.markdown("**Economic Hypothesis:**")
+                    st.write(hypothesis)
+
+                st.markdown("---")
+
+
+# --- Tab 3: Near Misses ---
+with tab3:
+    st.subheader("🎯 Near Misses (Sharpe >= 1.0, Failed Filters)")
+    st.caption(
+        "Promising candidates that scored Sharpe >= 1.0 but fell short of one or more hard gates. Prime candidates for mutation feedback."
+    )
+
+    if (
+        not filtered_alphas.empty
+        and "sharpe" in filtered_alphas.columns
+        and "passed_filters" in filtered_alphas.columns
+    ):
+        near_misses_df = filtered_alphas[
+            filtered_alphas["sharpe"].notna()
+            & (filtered_alphas["sharpe"] >= 1.0)
+            & (filtered_alphas["passed_filters"] == 0)
+        ].copy()
+    else:
+        near_misses_df = pd.DataFrame()
+
+    if near_misses_df.empty:
+        st.info("No near-miss alphas (Sharpe >= 1.0, passed_filters = 0) found in the selected date range.")
+    else:
+        near_misses_df["Diagnosis"] = near_misses_df.apply(diagnose_alpha, axis=1)
 
         cols_map = {
+            "alpha_id": "Alpha ID",
             "expression": "Expression",
-            "Hypothesis": "Hypothesis",
             "sharpe": "Sharpe",
             "fitness": "Fitness",
             "turnover": "Turnover",
+            "Diagnosis": "Diagnosis",
         }
-        available_cols = [c for c in ["expression", "Hypothesis", "sharpe", "fitness", "turnover"] if c in golden_alphas_df.columns]
-        display_df = golden_alphas_df[available_cols].rename(columns=cols_map)
+        available_cols = [
+            c
+            for c in ["alpha_id", "expression", "sharpe", "fitness", "turnover", "Diagnosis"]
+            if c in near_misses_df.columns
+        ]
+        display_nm = near_misses_df[available_cols].rename(columns=cols_map)
 
         st.dataframe(
-            display_df,
+            display_nm,
             use_container_width=True,
             hide_index=True,
         )
 
-# --- Tab 3: The Graveyard (Rejections) ---
-with tab3:
+
+# --- Tab 4: The Graveyard (Rejections) ---
+with tab4:
     st.subheader("The Graveyard (Pipeline Rejections)")
     st.caption(
         "Audit trail of rejected candidates caught by Validator static checks or PM Critic vetoes."
@@ -389,8 +619,10 @@ with tab3:
         st.info("No rejection events recorded in the graveyard for the selected date range.")
     else:
         if "component" in graveyard_df.columns:
-            comp_options = ["All"] + sorted(graveyard_df["component"].dropna().unique().tolist())
-            selected_comp = st.selectbox("Filter by Component", comp_options)
+            comp_options = ["All"] + sorted(
+                graveyard_df["component"].dropna().unique().tolist()
+            )
+            selected_comp = st.selectbox("Filter by Gatekeeper", comp_options)
             if selected_comp != "All":
                 graveyard_df = graveyard_df[graveyard_df["component"] == selected_comp]
 
@@ -401,7 +633,11 @@ with tab3:
             "reason": "Reason",
             "alpha_id": "Alpha ID",
         }
-        available_cols = [c for c in ["timestamp", "component", "status", "reason", "alpha_id"] if c in graveyard_df.columns]
+        available_cols = [
+            c
+            for c in ["timestamp", "component", "status", "reason", "alpha_id"]
+            if c in graveyard_df.columns
+        ]
         display_df = graveyard_df[available_cols].rename(columns=cols_map)
 
         st.dataframe(
@@ -410,8 +646,9 @@ with tab3:
             hide_index=True,
         )
 
-# --- Tab 4: System Logs ---
-with tab4:
+
+# --- Tab 5: System Logs ---
+with tab5:
     st.subheader("System Logs (`pipeline.log`)")
     st.caption("Latest 50 execution log lines captured from the automated alpha mining pipeline.")
 
