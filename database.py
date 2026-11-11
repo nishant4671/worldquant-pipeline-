@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+import re
 import sqlite3
 import threading
 from typing import Any
@@ -20,6 +21,19 @@ log = logging.getLogger(__name__)
 
 _initialized_dbs: set[str] = set()
 _init_lock = threading.Lock()
+
+
+def structural_fingerprint(expr: str) -> str:
+    """Compute structural fingerprint of an expression, replacing numbers with {N}.
+
+    Args:
+        expr: Alpha expression string.
+
+    Returns:
+        str: Transformed structural template.
+    """
+    normalized = re.sub(r"\s+", "", expr.lower())
+    return re.sub(r"\d+", "{N}", normalized)
 
 
 def hash_expression(expr: str) -> str:
@@ -102,6 +116,7 @@ def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
                     alpha_id TEXT UNIQUE NOT NULL,
                     expression TEXT NOT NULL,
                     expression_hash TEXT UNIQUE,
+                    structural_hash TEXT,
                     data_category TEXT,
                     sharpe REAL,
                     fitness REAL,
@@ -121,7 +136,7 @@ def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_alphas_passing ON alphas(passed_filters, notified, sharpe DESC);"
             )
 
-            # Check if migration is needed for existing tables without expression_hash
+            # Check if migration is needed for existing tables without expression_hash or structural_hash
             cursor = conn.cursor()
             cursor.execute("PRAGMA table_info(alphas)")
             columns = [row["name"] for row in cursor.fetchall()]
@@ -144,6 +159,25 @@ def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_alphas_expression_hash ON alphas(expression_hash);"
             )
 
+            if "structural_hash" not in columns:
+                conn.execute("ALTER TABLE alphas ADD COLUMN structural_hash TEXT")
+                cursor.execute("SELECT id, expression FROM alphas WHERE structural_hash IS NULL")
+                rows = cursor.fetchall()
+                for row in rows:
+                    fp = structural_fingerprint(row["expression"])
+                    conn.execute("UPDATE alphas SET structural_hash = ? WHERE id = ?", (fp, row["id"]))
+            else:
+                # Backfill any existing rows with null structural_hash
+                cursor.execute("SELECT id, expression FROM alphas WHERE structural_hash IS NULL")
+                rows = cursor.fetchall()
+                for row in rows:
+                    fp = structural_fingerprint(row["expression"])
+                    conn.execute("UPDATE alphas SET structural_hash = ? WHERE id = ?", (fp, row["id"]))
+
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alphas_structural_hash ON alphas(structural_hash);"
+            )
+
             conn.commit()
 
         _initialized_dbs.add(key)
@@ -152,7 +186,7 @@ def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
 def insert_alpha(record: dict[str, Any], db_path: Path | str | None = None) -> None:
     """Insert or replace an alpha record based on alpha_id.
 
-    Automatically computes and persists normalized expression_hash.
+    Automatically computes and persists normalized expression_hash and structural_hash.
 
     Args:
         record: Dictionary containing alpha metadata and metrics.
@@ -163,6 +197,7 @@ def insert_alpha(record: dict[str, Any], db_path: Path | str | None = None) -> N
     alpha_id = str(record["alpha_id"])
     expression = str(record.get("expression", ""))
     expr_hash = record.get("expression_hash") or hash_expression(expression)
+    struct_hash = record.get("structural_hash") or structural_fingerprint(expression)
     data_category = record.get("data_category") or record.get("category")
     data_category = str(data_category) if data_category is not None else None
 
@@ -197,14 +232,15 @@ def insert_alpha(record: dict[str, Any], db_path: Path | str | None = None) -> N
         conn.execute(
             """
             INSERT OR REPLACE INTO alphas (
-                alpha_id, expression, expression_hash, data_category, sharpe, fitness, turnover,
+                alpha_id, expression, expression_hash, structural_hash, data_category, sharpe, fitness, turnover,
                 passed_filters, notified, submitted, created_at, raw_response
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 alpha_id,
                 expression,
                 expr_hash,
+                struct_hash,
                 data_category,
                 sharpe_val,
                 fitness_val,
@@ -220,20 +256,20 @@ def insert_alpha(record: dict[str, Any], db_path: Path | str | None = None) -> N
 
 
 def expression_exists(expr: str, db_path: Path | str | None = None) -> bool:
-    """Check if a normalized expression has already been simulated and recorded in the database.
+    """Check if a structurally equivalent expression has already been simulated and recorded in the database.
 
     Args:
         expr: Alpha expression string.
         db_path: Optional path to the database file.
 
     Returns:
-        bool: True if expression hash exists in database, False otherwise.
+        bool: True if structural fingerprint exists in database, False otherwise.
     """
     target = _ensure_db(db_path)
-    expr_hash = hash_expression(expr)
+    struct_hash = structural_fingerprint(expr)
     with connect(target) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT 1 FROM alphas WHERE expression_hash = ? LIMIT 1", (expr_hash,))
+        cursor.execute("SELECT 1 FROM alphas WHERE structural_hash = ? LIMIT 1", (struct_hash,))
         return cursor.fetchone() is not None
 
 

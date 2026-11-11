@@ -4,6 +4,7 @@ import sqlite3
 import pytest
 
 import database
+from database import expression_exists, structural_fingerprint
 
 
 def test_init_db(tmp_path):
@@ -262,4 +263,29 @@ def test_backlog(tmp_path):
     batch2 = database.list_passing(limit=4, db_path=db_file)
     assert len(batch2) == 2
     assert [a["sharpe"] for a in batch2] == [1.6, 1.5]
+
+
+def test_structural_fingerprint():
+    """Assert structural fingerprint normalizes whitespace and replaces digit sequences with {N}."""
+    assert (
+        structural_fingerprint("ts_rank(close, 20)")
+        == structural_fingerprint("ts_rank( close, 21 )")
+        == "ts_rank(close,{N})"
+    )
+
+
+def test_structural_deduplication(tmp_path):
+    """Insert an alpha with ts_rank(close, 20); assert expression_exists returns True for ts_rank(close, 60)."""
+    db_file = tmp_path / "test_struct_dedup.db"
+    database.insert_alpha(
+        {
+            "alpha_id": "alpha_struct_1",
+            "expression": "ts_rank(close, 20)",
+            "data_category": "price_volume",
+            "passed_filters": 1,
+        },
+        db_path=db_file,
+    )
+
+    assert expression_exists("ts_rank(close, 60)", db_path=db_file) is True
 
