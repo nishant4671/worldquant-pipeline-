@@ -130,24 +130,31 @@ def validate_expression(expr: str) -> tuple[bool, str]:
 
 
 def validate_batch(
-    expressions: list[str],
-) -> tuple[list[str], list[tuple[str, str]]]:
-    """Validate a batch of Fast Expression strings.
+    expressions: list[dict],
+) -> tuple[list[dict], list[tuple[dict, str]]]:
+    """Validate a batch of Fast Expression dictionaries.
 
     Args:
-        expressions: List of expression strings.
+        expressions: List of expression dictionaries (e.g., from the LLM).
 
     Returns:
-        tuple[list[str], list[tuple[str, str]]]: (valid_expressions, rejected_expressions_with_reasons)
+        tuple[list[dict], list[tuple[dict, str]]]: (valid_list, rejected_list)
     """
-    valid: list[str] = []
-    rejected: list[tuple[str, str]] = []
+    valid: list[dict] = []
+    rejected: list[tuple[dict, str]] = []
 
-    for expr in expressions:
-        is_valid, reason = validate_expression(expr)
-        if is_valid:
-            valid.append(expr)
+    for item in expressions:
+        if isinstance(item, dict):
+            expr_str = item.get("expression", "")
+            target = item
         else:
-            rejected.append((expr, reason))
+            expr_str = str(item)
+            target = {"expression": expr_str}
+
+        is_valid, reason = validate_expression(expr_str)
+        if is_valid:
+            valid.append(target)
+        else:
+            rejected.append((target, reason))
 
     return valid, rejected

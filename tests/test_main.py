@@ -51,7 +51,7 @@ def test_pipeline_all_rejected_exits_gracefully(mocker):
     mocker.patch("database.init_db")
     mocker.patch(
         "validator.validate_batch",
-        return_value=([], [("invalid_expr", "Unknown field")]),
+        return_value=([], [({"expression": "invalid_expr"}, "Unknown field")]),
     )
     mock_run_batch = mocker.patch("engine.AlphaEngine.run_batch")
 

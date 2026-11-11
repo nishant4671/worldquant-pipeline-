@@ -36,9 +36,9 @@ def test_python_keywords():
 def test_valid_batch():
     """Test batch validation with all valid expressions."""
     expressions = [
-        "rank(close)",
-        "-ts_delta(volume, 5)",
-        "group_rank(returns, sector)",
+        {"expression": "rank(close)"},
+        {"expression": "-ts_delta(volume, 5)"},
+        {"expression": "group_rank(returns, sector)"},
     ]
     valid, rejected = validate_batch(expressions)
     assert valid == expressions
@@ -48,14 +48,14 @@ def test_valid_batch():
 def test_mixed_batch():
     """Test batch validation separating valid and hallucinated expressions."""
     expressions = [
-        "rank(close)",
-        "rank(hallucinated_alpha_signal)",
+        {"expression": "rank(close)"},
+        {"expression": "rank(hallucinated_alpha_signal)"},
     ]
     valid, rejected = validate_batch(expressions)
-    assert valid == ["rank(close)"]
+    assert valid == [{"expression": "rank(close)"}]
     assert len(rejected) == 1
     rejected_expr, reason = rejected[0]
-    assert rejected_expr == "rank(hallucinated_alpha_signal)"
+    assert rejected_expr == {"expression": "rank(hallucinated_alpha_signal)"}
     assert reason == "Hallucinated field/operator: hallucinated_alpha_signal"
 
 

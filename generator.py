@@ -36,6 +36,7 @@ KNOWN_FIELDS: dict[str, list[str]] = {
         "cash",  # confidence: medium
         "debt",  # confidence: medium
         "ebit",  # confidence: medium
+        "eps",  # confidence: medium
     ],
     "analyst": [
         "target_price",  # confidence: medium

@@ -42,12 +42,19 @@ class MockLLMClient:
         known_fields: dict[str, list[str]],
         operators: list[str],
         num_alphas: int = 5,
-    ) -> list[str]:
+    ) -> list[dict]:
         """Propose canned valid alpha expressions for mock runs."""
         sample_fields = ["close", "volume", "open", "high", "low", "returns"]
-        return [f"rank({sample_fields[i % len(sample_fields)]})" for i in range(num_alphas)]
+        return [
+            {
+                "hypothesis": f"Momentum on {sample_fields[i % len(sample_fields)]}",
+                "expression": f"rank({sample_fields[i % len(sample_fields)]})",
+                "expected_turnover": "low",
+            }
+            for i in range(num_alphas)
+        ]
 
-    def critique_alphas(self, expressions: list[str]) -> list[str]:
+    def critique_alphas(self, expressions: list[Any]) -> list[Any]:
         """Approve all expressions in mock runs."""
         return expressions
 
@@ -183,7 +190,12 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
 
     log.info("Step 4: Statically validating %d proposed expressions...", len(proposed))
     valid_exprs, rejected = validator.validate_batch(proposed)
-    for rej_expr, reason in rejected:
+    for rej_item, reason in rejected:
+        rej_expr = (
+            rej_item.get("expression", str(rej_item))
+            if isinstance(rej_item, dict)
+            else str(rej_item)
+        )
         log.warning("Validator rejected '%s': %s", rej_expr, reason)
 
     if not valid_exprs:
@@ -199,7 +211,20 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
         return
 
     log.info("Step 6: Simulating %d approved alphas (mock=%s)...", len(approved), args.mock)
-    pairs = [(expr, "price_volume") for expr in approved]
+    for alpha in approved:
+        expr = alpha.get("expression", str(alpha)) if isinstance(alpha, dict) else str(alpha)
+        hypothesis = (
+            alpha.get("hypothesis", "N/A") if isinstance(alpha, dict) else "N/A"
+        )
+        log.info("Simulating: %s (Hypothesis: %s)", expr, hypothesis)
+
+    pairs = [
+        (
+            alpha["expression"] if isinstance(alpha, dict) else str(alpha),
+            "llm_generated",
+        )
+        for alpha in approved
+    ]
     engine = AlphaEngine(client=client)
     results = engine.run_batch(pairs)
 
