@@ -160,3 +160,43 @@ def test_proposer_prompt_forces_cross_category(mocker):
     assert "counter_party" in system_msg
     assert "failure_mode" in system_msg
 
+
+def test_critic_rejects_inverted_sign(mocker):
+    """Test that critique_alphas rejects when critic detects an inverted sign."""
+    mock_router = mocker.MagicMock(spec=Router)
+    mock_resp = mocker.MagicMock()
+    mock_resp.choices = [mocker.MagicMock()]
+    mock_resp.choices[0].message.content = (
+        '{"decision": "REJECT", "critique": "Sign inversion: hypothesis states long momentum but expression is negative."}'
+    )
+    mock_router.completion.return_value = mock_resp
+
+    client = LLMClient(router=mock_router)
+    inputs = [
+        {
+            "mechanism": "Momentum",
+            "direction": "Long high returns",
+            "expression": "-rank(returns)",
+        }
+    ]
+    approved = client.critique_alphas(inputs)
+    assert approved == []
+
+
+def test_critic_prompt_contains_sign_check(mocker):
+    """Test that critique_alphas system prompt contains the independent sign check instruction."""
+    mock_router = mocker.MagicMock(spec=Router)
+    mock_resp = mocker.MagicMock()
+    mock_resp.choices = [mocker.MagicMock()]
+    mock_resp.choices[0].message.content = '{"decision": "APPROVE", "critique": "Valid sign"}'
+    mock_router.completion.return_value = mock_resp
+
+    client = LLMClient(router=mock_router)
+    client.critique_alphas([{"expression": "rank(close)"}])
+
+    call_kwargs = mock_router.completion.call_args.kwargs
+    messages = call_kwargs["messages"]
+    system_msg = next(m["content"] for m in messages if m["role"] == "system")
+    assert "Independently derive what the sign of the expression SHOULD be" in system_msg
+
+

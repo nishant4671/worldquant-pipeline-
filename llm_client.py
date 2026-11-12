@@ -229,9 +229,13 @@ class LLMClient:
             return []
 
         system_prompt = (
-            "You are a ruthless Portfolio Manager. Veto any alpha that is textbook, trivial, or fails to use "
-            "group_neutralize. Reject formulas with excessive turnover. Reject if the hypothesis does not match "
-            "the math. Output a strict JSON object: {'decision': 'APPROVE/REJECT', 'critique': '...'}."
+            "You are a ruthless Portfolio Manager. Review the provided alphas. Each alpha contains a "
+            "'mechanism', 'direction', and 'expression'. Independently derive what the sign of the "
+            "expression SHOULD be based on the mechanism and direction. If the expression's math is "
+            "inverted relative to the stated hypothesis (e.g., hypothesis says long momentum, but the "
+            "expression has a negative sign), you MUST reject the alpha. Reject formulas with excessive "
+            "turnover. Reject if the hypothesis does not match the math. Output a strict JSON object: "
+            "{'decision': 'APPROVE/REJECT', 'critique': '...'}."
         )
         user_prompt = json.dumps(expressions)
 
