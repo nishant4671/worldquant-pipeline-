@@ -391,4 +391,33 @@ def test_log_event_and_get_events(tmp_path):
     assert critic_events[0]["alpha_id"] == "A001"
 
 
+def test_genome_storage(tmp_path):
+    """Verify genome storage and retrieval as a dictionary."""
+    db_file = tmp_path / "test_genome.db"
+    record = {
+        "alpha_id": "alpha_genome_001",
+        "expression": "ts_rank(close, 20)",
+        "sharpe": 1.65,
+        "fitness": 1.25,
+        "turnover": 0.15,
+        "passed_filters": 1,
+        "genome": {"core_field": "close", "window": 20, "neutralization": "sector"},
+    }
+
+    database.insert_alpha(record, db_path=db_file)
+    retrieved = database.get_alpha("alpha_genome_001", db_path=db_file)
+
+    assert retrieved is not None
+    assert isinstance(retrieved["genome"], dict)
+    assert retrieved["genome"]["window"] == 20
+    assert retrieved["genome"]["core_field"] == "close"
+    assert retrieved["genome"]["neutralization"] == "sector"
+
+    passing = database.list_passing(limit=10, db_path=db_file)
+    assert len(passing) == 1
+    assert isinstance(passing[0]["genome"], dict)
+    assert passing[0]["genome"]["window"] == 20
+
+
+
 

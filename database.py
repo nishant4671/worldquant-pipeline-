@@ -125,7 +125,8 @@ def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
                     notified INTEGER NOT NULL DEFAULT 0,
                     submitted INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
-                    raw_response TEXT
+                    raw_response TEXT,
+                    genome TEXT
                 );
                 """
             )
@@ -197,6 +198,9 @@ def init_db(db_path: Path | str | None = None, force: bool = False) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_alphas_structural_hash ON alphas(structural_hash);"
             )
 
+            if "genome" not in columns:
+                conn.execute("ALTER TABLE alphas ADD COLUMN genome TEXT")
+
             conn.commit()
 
         _initialized_dbs.add(key)
@@ -247,13 +251,21 @@ def insert_alpha(record: dict[str, Any], db_path: Path | str | None = None) -> N
     else:
         raw_response_str = "{}"
 
+    genome = record.get("genome")
+    if isinstance(genome, dict):
+        genome_val = json.dumps(genome)
+    elif isinstance(genome, str):
+        genome_val = genome
+    else:
+        genome_val = None
+
     with connect(target) as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO alphas (
                 alpha_id, expression, expression_hash, structural_hash, data_category, sharpe, fitness, turnover,
-                passed_filters, notified, submitted, created_at, raw_response
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                passed_filters, notified, submitted, created_at, raw_response, genome
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 alpha_id,
@@ -269,9 +281,22 @@ def insert_alpha(record: dict[str, Any], db_path: Path | str | None = None) -> N
                 submitted,
                 str(created_at),
                 raw_response_str,
+                genome_val,
             ),
         )
         conn.commit()
+
+
+def _format_alpha_row(row: sqlite3.Row) -> dict[str, Any]:
+    """Format an alphas table sqlite3.Row into a dictionary, deserializing genome if present."""
+    record = dict(row)
+    genome_val = record.get("genome")
+    if genome_val is not None:
+        try:
+            record["genome"] = json.loads(genome_val) if isinstance(genome_val, str) else genome_val
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return record
 
 
 def expression_exists(expr: str, db_path: Path | str | None = None) -> bool:
@@ -309,7 +334,7 @@ def get_alpha(alpha_id: str, db_path: Path | str | None = None) -> dict[str, Any
         row = cursor.fetchone()
         if row is None:
             return None
-        return dict(row)
+        return _format_alpha_row(row)
 
 
 def list_passing(limit: int = 4, db_path: Path | str | None = None) -> list[dict[str, Any]]:
@@ -334,7 +359,7 @@ def list_passing(limit: int = 4, db_path: Path | str | None = None) -> list[dict
             """,
             (limit,),
         )
-        return [dict(row) for row in cursor.fetchall()]
+        return [_format_alpha_row(row) for row in cursor.fetchall()]
 
 
 def get_near_misses(limit: int = 3, db_path: Path | str | None = None) -> list[dict[str, Any]]:
@@ -364,7 +389,7 @@ def get_near_misses(limit: int = 3, db_path: Path | str | None = None) -> list[d
             """,
             (limit,),
         )
-        return [dict(row) for row in cursor.fetchall()]
+        return [_format_alpha_row(row) for row in cursor.fetchall()]
 
 
 def mark_notified(alpha_id: str, db_path: Path | str | None = None) -> None:
