@@ -69,6 +69,7 @@ class CircuitBreaker:
                     "Circuit breaker tripped: %d consecutive 429s. Halting pipeline.",
                     self.consecutive_failures,
                 )
+                notifier.send_system_alert("WorldQuant API Rate Limit hit. Pipeline paused.")
                 notifier.send_alert(
                     f"CIRCUIT BREAKER TRIPPED: {self.failure_threshold} consecutive 429s. Halting pipeline."
                 )

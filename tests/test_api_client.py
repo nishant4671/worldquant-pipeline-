@@ -297,6 +297,48 @@ def test_429_backoff(mocker):
     client.close()
 
 
+def test_three_consecutive_429_sends_system_alert(mocker):
+    """Test that 3 consecutive 429s trigger notifier.send_system_alert before backing off."""
+    client = BrainClient()
+    client._token = "valid-token"
+    client._expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+    mock_sleep = mocker.patch("time.sleep")
+    mock_system_alert = mocker.patch("notifier.send_system_alert")
+
+    resp_429 = mocker.MagicMock(spec=requests.Response)
+    resp_429.status_code = 429
+    resp_429.headers = {"Retry-After": "1"}
+    resp_429.text = "Rate limit hit"
+
+    resp_200 = mocker.MagicMock(spec=requests.Response)
+    resp_200.status_code = 200
+    resp_200.text = "OK"
+
+    # Request 1: hits 429 (count 1), then retries 200
+    # But to test 3 consecutive 429s across requests:
+    # Let request 1 hit 429 and succeed on retry? That reset count.
+    # To get 3 consecutive 429s:
+    # Request 1: 429 (count 1), retry 429 (count 2, raises 429)
+    # Request 2: 429 (count 3, alert triggered!)
+    mocker.patch.object(client._session, "request", return_value=resp_429)
+
+    # First request: fails on initial (1) and retry (2)
+    with pytest.raises(BrainApiError):
+        client.request("GET", "/req1")
+    assert client._consecutive_429 == 2
+    mock_system_alert.assert_not_called()
+
+    # Second request: hits 429 on initial (3) -> triggers alert!
+    with pytest.raises(BrainApiError):
+        client.request("GET", "/req2")
+
+    assert client._consecutive_429 >= 3
+    mock_system_alert.assert_called_with("WorldQuant API Rate Limit hit. Pipeline paused.")
+    client.close()
+
+
+
 def test_network_dropout(mocker):
     """Mock session.request to raise ConnectionError; assert single retry and BrainApiError(500)."""
     client = BrainClient()

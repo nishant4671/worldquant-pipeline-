@@ -103,6 +103,29 @@ def send_digest(limit: int | None = None, db_path: Path | str | None = None) -> 
     return message_ids
 
 
+def send_system_alert(message: str) -> bool:
+    """Send a high-priority system alert to Telegram with 🚨 emoji.
+
+    Args:
+        message: Alert description text.
+
+    Returns:
+        bool: True if alert dispatched successfully, False otherwise.
+    """
+    base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+    text = message if "🚨" in message else f"🚨 {message}"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+    }
+    try:
+        resp = requests.post(f"{base_url}/sendMessage", json=payload, timeout=10)
+        return resp.status_code == 200
+    except Exception as e:
+        log.warning("Failed to dispatch Telegram system alert: %s", e)
+        return False
+
+
 def send_alert(message: str) -> None:
     """Send an urgent alert message to Telegram. Catches all exceptions quietly.
 

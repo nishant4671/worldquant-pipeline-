@@ -163,3 +163,22 @@ def test_poll_skip_action(mocker):
     called_endpoints = [call[0][0] for call in mock_post.call_args_list]
     assert any("answerCallbackQuery" in ep for ep in called_endpoints)
     assert any("editMessageText" in ep for ep in called_endpoints)
+
+
+def test_send_system_alert(mocker):
+    """Test send_system_alert dispatches high priority message with 🚨 emoji."""
+    fake_resp = mocker.MagicMock(spec=requests.Response)
+    fake_resp.status_code = 200
+    mock_post = mocker.patch("requests.post", return_value=fake_resp)
+
+    success = notifier.send_system_alert("Gemini API is down.")
+
+    assert success is True
+    mock_post.assert_called_once()
+    called_url = mock_post.call_args[0][0]
+    called_payload = mock_post.call_args[1]["json"]
+    assert f"bot{TELEGRAM_BOT_TOKEN}" in called_url
+    assert called_payload["chat_id"] == TELEGRAM_CHAT_ID
+    assert "🚨" in called_payload["text"]
+    assert "Gemini API is down." in called_payload["text"]
+

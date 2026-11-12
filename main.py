@@ -17,7 +17,7 @@ from config import TELEGRAM_CHAT_ID, settings
 import database
 from engine import AlphaEngine, FakeClient, SimulationResult
 from generator import KNOWN_FIELDS, generate_expressions
-from llm_client import LLMClient
+from llm_client import AllProvidersFailedException, LLMClient, LLMOutageError
 import notifier
 import validator
 
@@ -163,106 +163,130 @@ def _cmd_listen(args: argparse.Namespace) -> None:
 
 def _cmd_pipeline(args: argparse.Namespace) -> None:
     """Run full intelligent pipeline: Init DB -> Propose -> Validate -> Critique -> Simulate -> Digest."""
-    log.info("Step 1: Initializing database...")
-    database.init_db()
+    try:
+        log.info("Step 1: Initializing database...")
+        database.init_db()
 
-    log.info("Step 2: Initializing LLM client (mock=%s)...", args.mock)
-    if args.mock:
-        log.info("[MOCK] Running with mock LLM client and mock Brain client.")
-        client = FakeClient()
-        try:
-            inst = LLMClient()
-            if isinstance(inst, LLMClient):
+        log.info("Step 2: Initializing LLM client (mock=%s)...", args.mock)
+        if args.mock:
+            log.info("[MOCK] Running with mock LLM client and mock Brain client.")
+            client = FakeClient()
+            try:
+                inst = LLMClient()
+                if isinstance(inst, LLMClient):
+                    llm_client = MockLLMClient()
+                else:
+                    llm_client = inst
+            except Exception:
                 llm_client = MockLLMClient()
-            else:
-                llm_client = inst
-        except Exception:
-            llm_client = MockLLMClient()
-    else:
-        client = BrainClient()
-        llm_client = LLMClient()
+        else:
+            client = BrainClient()
+            llm_client = LLMClient()
 
-    near_misses = database.get_near_misses(limit=3)
-    log.info("Found %d near-miss alphas for mutation feedback.", len(near_misses))
+        near_misses = database.get_near_misses(limit=3)
+        log.info("Found %d near-miss alphas for mutation feedback.", len(near_misses))
 
-    log.info("Step 3: Proposing %d Fast Expressions via LLM...", args.n)
-    proposed = llm_client.generate_alphas(
-        KNOWN_FIELDS, FAST_EXPR_OPERATORS, num_alphas=args.n, near_misses=near_misses
-    )
-    if not proposed:
-        log.warning("No alphas proposed by LLM. Exiting pipeline gracefully.")
-        print("Pipeline finished: 0 alphas proposed.")
+        log.info("Step 3: Proposing %d Fast Expressions via LLM...", args.n)
+        try:
+            proposed = llm_client.generate_alphas(
+                KNOWN_FIELDS, FAST_EXPR_OPERATORS, num_alphas=args.n, near_misses=near_misses
+            )
+        except AllProvidersFailedException as exc:
+            log.error("All LLM providers failed during proposal: %s", exc)
+            notifier.send_system_alert("CRITICAL: All LLM providers are down. Pipeline aborted.")
+            return
+
+        if not proposed:
+            log.warning("No alphas proposed by LLM. Exiting pipeline gracefully.")
+            print("Pipeline finished: 0 alphas proposed.")
+            return
+
+        log.info("Step 4: Statically validating %d proposed expressions...", len(proposed))
+        valid_exprs, rejected = validator.validate_batch(proposed)
+        for rej_item, reason in rejected:
+            rej_expr = (
+                rej_item.get("expression", str(rej_item))
+                if isinstance(rej_item, dict)
+                else str(rej_item)
+            )
+            alpha_id = rej_item.get("alpha_id") if isinstance(rej_item, dict) else None
+            log.warning("Validator rejected '%s': %s", rej_expr, reason)
+            database.log_event(
+                component="Validator",
+                status="REJECTED",
+                reason=f"{reason}: {rej_expr}" if rej_expr else reason,
+                alpha_id=alpha_id,
+            )
+
+        if not valid_exprs:
+            log.warning("All proposed alphas were rejected by validator. Exiting pipeline gracefully.")
+            print("Pipeline finished: 0 valid alphas remaining.")
+            return
+
+        log.info("Step 5: Passing %d valid expressions to Portfolio Manager Critic...", len(valid_exprs))
+        try:
+            approved = llm_client.critique_alphas(valid_exprs)
+        except AllProvidersFailedException as exc:
+            log.error("All LLM providers failed during critique: %s", exc)
+            notifier.send_system_alert("CRITICAL: All LLM providers are down. Pipeline aborted.")
+            return
+        rejected_by_critic = [a for a in valid_exprs if a not in approved]
+        for alpha in rejected_by_critic:
+            expr = alpha.get("expression", str(alpha)) if isinstance(alpha, dict) else str(alpha)
+            alpha_id = alpha.get("alpha_id") if isinstance(alpha, dict) else None
+            database.log_event(
+                component="Critic",
+                status="REJECTED",
+                reason=f"Rejected by Critic: {expr}" if expr else "Rejected by Critic",
+                alpha_id=alpha_id,
+            )
+
+        if not approved:
+            log.warning("No alphas approved by PM Critic. Exiting pipeline gracefully.")
+            print("Pipeline finished: 0 approved alphas remaining.")
+            return
+
+        log.info("Step 6: Simulating %d approved alphas (mock=%s)...", len(approved), args.mock)
+        for alpha in approved:
+            expr = alpha.get("expression", str(alpha)) if isinstance(alpha, dict) else str(alpha)
+            hypothesis = (
+                alpha.get("hypothesis", "N/A") if isinstance(alpha, dict) else "N/A"
+            )
+            log.info("Simulating: %s (Hypothesis: %s)", expr, hypothesis)
+
+        pairs = [
+            (
+                alpha["expression"] if isinstance(alpha, dict) else str(alpha),
+                "llm_generated",
+            )
+            for alpha in approved
+        ]
+        engine = AlphaEngine(client=client)
+        results = engine.run_batch(pairs)
+
+        passed_count = sum(1 for r in results if r.status == "passed")
+        skipped_count = sum(1 for r in results if r.status == "skipped")
+        error_count = sum(1 for r in results if r.status == "error")
+        print(
+            f"Simulation completed: {len(results)} simulated "
+            f"({passed_count} passed, {skipped_count} skipped, {error_count} errors)."
+        )
+
+        log.info("Step 7: Sending daily digest to Telegram...")
+        sent = notifier.send_digest()
+        print(f"Digest step completed: sent {len(sent)} alphas.")
+
+        if passed_count == 0:
+            log.warning("Pipeline finished with 0 passed alphas.")
+            notifier.send_system_alert(
+                "Pipeline finished. 0 alphas passed today. Check the dashboard for reasons."
+            )
+
+    except (AllProvidersFailedException, LLMOutageError) as err:
+        log.error("LLM Outage encountered during pipeline execution: %s", err)
+        notifier.send_system_alert("CRITICAL: All LLM providers are down. Pipeline aborted.")
+        print("Pipeline aborted due to LLM outage.")
         return
-
-    log.info("Step 4: Statically validating %d proposed expressions...", len(proposed))
-    valid_exprs, rejected = validator.validate_batch(proposed)
-    for rej_item, reason in rejected:
-        rej_expr = (
-            rej_item.get("expression", str(rej_item))
-            if isinstance(rej_item, dict)
-            else str(rej_item)
-        )
-        alpha_id = rej_item.get("alpha_id") if isinstance(rej_item, dict) else None
-        log.warning("Validator rejected '%s': %s", rej_expr, reason)
-        database.log_event(
-            component="Validator",
-            status="REJECTED",
-            reason=f"{reason}: {rej_expr}" if rej_expr else reason,
-            alpha_id=alpha_id,
-        )
-
-    if not valid_exprs:
-        log.warning("All proposed alphas were rejected by validator. Exiting pipeline gracefully.")
-        print("Pipeline finished: 0 valid alphas remaining.")
-        return
-
-    log.info("Step 5: Passing %d valid expressions to Portfolio Manager Critic...", len(valid_exprs))
-    approved = llm_client.critique_alphas(valid_exprs)
-    rejected_by_critic = [a for a in valid_exprs if a not in approved]
-    for alpha in rejected_by_critic:
-        expr = alpha.get("expression", str(alpha)) if isinstance(alpha, dict) else str(alpha)
-        alpha_id = alpha.get("alpha_id") if isinstance(alpha, dict) else None
-        database.log_event(
-            component="Critic",
-            status="REJECTED",
-            reason=f"Rejected by Critic: {expr}" if expr else "Rejected by Critic",
-            alpha_id=alpha_id,
-        )
-
-    if not approved:
-        log.warning("No alphas approved by PM Critic. Exiting pipeline gracefully.")
-        print("Pipeline finished: 0 approved alphas remaining.")
-        return
-
-    log.info("Step 6: Simulating %d approved alphas (mock=%s)...", len(approved), args.mock)
-    for alpha in approved:
-        expr = alpha.get("expression", str(alpha)) if isinstance(alpha, dict) else str(alpha)
-        hypothesis = (
-            alpha.get("hypothesis", "N/A") if isinstance(alpha, dict) else "N/A"
-        )
-        log.info("Simulating: %s (Hypothesis: %s)", expr, hypothesis)
-
-    pairs = [
-        (
-            alpha["expression"] if isinstance(alpha, dict) else str(alpha),
-            "llm_generated",
-        )
-        for alpha in approved
-    ]
-    engine = AlphaEngine(client=client)
-    results = engine.run_batch(pairs)
-
-    passed_count = sum(1 for r in results if r.status == "passed")
-    skipped_count = sum(1 for r in results if r.status == "skipped")
-    error_count = sum(1 for r in results if r.status == "error")
-    print(
-        f"Simulation completed: {len(results)} simulated "
-        f"({passed_count} passed, {skipped_count} skipped, {error_count} errors)."
-    )
-
-    log.info("Step 7: Sending daily digest to Telegram...")
-    sent = notifier.send_digest()
-    print(f"Digest step completed: sent {len(sent)} alphas.")
 
 
 def _build_parser() -> argparse.ArgumentParser:

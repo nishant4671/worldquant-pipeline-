@@ -1,19 +1,25 @@
-"""Google GenAI LLM Client for WorldQuant BRAIN Fast Expression alpha generation.
+"""Multi-Provider Resilient LLM Client using LiteLLM Router.
 
-Migrated to google-genai SDK. Manages API interactions, key rotation upon
-HTTP 429 rate limits, JSON parsing for proposed alpha expressions, and
-portfolio manager critique filtering.
+Replaces google-genai SDK with LiteLLM Router for automated failovers across
+multiple free-tier LLM providers (Gemini, Groq, OpenRouter, Cloudflare),
+enforcing Blind-Spot Diversity and resilience against single-provider outages.
 """
 
 import json
 import logging
-import time
+import os
 from typing import Any
 
-from google import genai
-from google.genai import errors, types
+from litellm import Router
+from litellm.exceptions import (
+    APIError,
+    AuthenticationError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+)
 
-import config
+from config import ROUTER
 
 log = logging.getLogger(__name__)
 
@@ -29,152 +35,122 @@ DEFAULT_OPERATORS: list[str] = [
 ]
 
 
-def _strip_markdown_code_block(text: str) -> str:
-    """Robustly strip markdown code fences and backticks from response text."""
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.splitlines()
-        # Drop opening fence (e.g. ``` or ```json)
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        # Drop closing fence
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
-    elif cleaned.startswith("`") and cleaned.endswith("`"):
-        cleaned = cleaned.strip("`").strip()
-    return cleaned
+class AllProvidersFailedException(Exception):
+    """Raised when all LLM providers in the Router fail."""
+    pass
 
 
-def _is_rate_limit_error(exc: Exception) -> bool:
-    """Check if exception represents an HTTP 429 rate limit or quota exhaustion."""
-    if isinstance(exc, errors.APIError):
-        code = getattr(exc, "code", None)
-        status_code = getattr(exc, "status_code", None)
-        if code == 429 or status_code == 429:
-            return True
-
-    err_code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-    if err_code == 429:
-        return True
-
-    err_str = str(exc)
-    return "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+# Backward compatibility alias
+LLMOutageError = AllProvidersFailedException
 
 
 class LLMClient:
-    """Client for generating and critiquing Fast Expression alphas via Google Gemini."""
+    """Client for proposing and critiquing Fast Expression alphas via LiteLLM Router."""
 
-    def __init__(self, api_keys: list[str] | None = None) -> None:
-        """Initialize LLM client with configured Gemini API keys.
+    def __init__(
+        self,
+        router: Router | None = None,
+        api_keys: list[str] | None = None,
+    ) -> None:
+        """Initialize LLMClient with configured Router or default global ROUTER."""
+        self.router: Router = router or ROUTER
+        self.api_keys: list[str] | None = api_keys
 
-        Args:
-            api_keys: Optional list of Gemini API keys. If None, loaded from config.
+    def _parse_heavy_json(self, raw_text: str, expect_list: bool) -> list | dict:
+        """Robustly extract and parse JSON lists or objects from LLM output.
+
+        Finds the outermost matching brackets ('[' and ']' for lists, '{' and '}' for dicts)
+        ignoring surrounding conversational or markdown text.
         """
-        self.api_keys: list[str] = (
-            api_keys if api_keys is not None else list(config.GEMINI_API_KEYS)
-        )
-        if not self.api_keys:
-            raise RuntimeError("Missing Gemini API keys in configuration.")
+        if not isinstance(raw_text, str):
+            if expect_list and isinstance(raw_text, list):
+                return raw_text
+            if not expect_list and isinstance(raw_text, dict):
+                return raw_text
+            return [] if expect_list else {}
 
-        self.current_key_index: int = 0
-        self._init_client()
+        cleaned = raw_text.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            cleaned = "\n".join(lines).strip()
 
-    def _init_client(self) -> None:
-        """Instantiate genai.Client with the current API key."""
-        api_key = self.api_keys[self.current_key_index]
+        start_char = "[" if expect_list else "{"
+        end_char = "]" if expect_list else "}"
+        start_idx = cleaned.find(start_char)
+        end_idx = cleaned.rfind(end_char)
+
+        if start_idx == -1 or end_idx == -1 or end_idx < start_idx:
+            log.warning("JSON delimiter not found in text: %s", raw_text[:200])
+            return [] if expect_list else {}
+
+        json_str = cleaned[start_idx : end_idx + 1]
         try:
-            self.client = genai.Client(
-                api_key=api_key,
-                http_options=types.HttpOptions(api_version="v1beta"),
-            )
-        except Exception:
-            self.client = genai.Client(api_key=api_key)
-
-    def _rotate_key(self) -> None:
-        """Rotate to next API key, re-instantiate client, and log warning."""
-        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
-        self._init_client()
-        log.warning(f"Rate limit hit. Rotating to API key index {self.current_key_index}")
-
-    def _call_model(self, prompt: str, system_prompt: str) -> str | None:
-        """Execute model content generation with single-shot 429 rate limit retry.
-
-        Args:
-            prompt: User prompt content.
-            system_prompt: System instruction directing model persona and format.
-
-        Returns:
-            str | None: Generated text response, or None if failed.
-        """
-        def _exec_generate() -> str | None:
-            gen_config = types.GenerateContentConfig(
-                response_mime_type="application/json",
-                system_instruction=system_prompt,
-            )
-            response = self.client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=gen_config,
-            )
-            return response.text
-
-        try:
-            return _exec_generate()
-        except Exception as e:
-            if _is_rate_limit_error(e):
-                log.warning("Rate limit hit on Gemini API: %s", e)
-                if len(self.api_keys) > 1:
-                    self._rotate_key()
-                else:
-                    time.sleep(60)
-
-                # Retry ONCE
-                try:
-                    return _exec_generate()
-                except Exception as retry_err:
-                    log.error("Gemini API call failed after rate limit retry: %s", retry_err)
-                    return None
+            data = json.loads(json_str)
+            if expect_list:
+                if isinstance(data, list):
+                    return data
+                log.warning("Expected JSON list, got %s", type(data).__name__)
+                return []
             else:
-                log.error("Gemini API call failed: %s", e)
-                return None
+                if isinstance(data, dict):
+                    return data
+                log.warning("Expected JSON dict, got %s", type(data).__name__)
+                return {}
+        except Exception as exc:
+            log.warning("Heavy JSON parser failed for extracted substring: %s (%s)", json_str[:200], exc)
+            return [] if expect_list else {}
 
-    def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
-        """Call LLM with system prompt and user prompt, returning raw text.
-
-        Args:
-            system_prompt: System instruction directing model persona and format.
-            user_prompt: User prompt content.
-
-        Returns:
-            str: Generated text response, or empty string on failure.
-        """
-        result = self._call_model(prompt=user_prompt, system_prompt=system_prompt)
-        return result if result is not None else ""
-
-    def _parse_alphas(self, raw_text: str) -> list[dict]:
-        """Parse raw response text into a list of alpha dictionaries.
+    def _call_router(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        expect_list: bool,
+    ) -> list | dict:
+        """Execute router completion and parse structured JSON response.
 
         Args:
-            raw_text: Raw response string from model.
+            model: Model alias configured in LiteLLM router.
+            system_prompt: System persona instruction.
+            user_prompt: User instruction or candidate expression payload.
+            expect_list: True if output should be a JSON array, False for JSON object.
 
         Returns:
-            list[dict]: Parsed alpha dictionaries.
+            list | dict: Parsed JSON array or dictionary.
 
         Raises:
-            ValueError: If parsing fails or output is not a JSON array.
+            AllProvidersFailedException: When all router deployments fail.
         """
-        cleaned = _strip_markdown_code_block(raw_text)
-        data = json.loads(cleaned)
-        if not isinstance(data, list):
-            raise ValueError(f"Expected JSON array, got {type(data).__name__}")
-        results: list[dict] = []
-        for item in data:
-            if isinstance(item, dict):
-                results.append(item)
-            elif isinstance(item, str):
-                results.append({"expression": item})
-        return results
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        try:
+            response = self.router.completion(model=model, messages=messages)
+        except (
+            APIError,
+            AuthenticationError,
+            RateLimitError,
+            ServiceUnavailableError,
+            Timeout,
+            Exception,
+        ) as exc:
+            log.error("LiteLLM Router call failed for model '%s': %s", model, exc)
+            raise AllProvidersFailedException(
+                f"All LLM providers failed for {model}: {exc}"
+            ) from exc
+
+        raw_text = ""
+        if response and hasattr(response, "choices") and response.choices:
+            raw_text = response.choices[0].message.content or ""
+        elif isinstance(response, dict) and "choices" in response:
+            raw_text = response["choices"][0]["message"]["content"] or ""
+
+        return self._parse_heavy_json(raw_text, expect_list=expect_list)
 
     def generate_alphas(
         self,
@@ -187,9 +163,8 @@ class LLMClient:
 
         Args:
             known_fields: Dictionary of verified fields by category.
-            operators: List of allowed mathematical/time-series operators. Defaults
-                to DEFAULT_OPERATORS including advanced operators.
-            num_alphas: Number of alpha expressions to request (default 5).
+            operators: List of allowed mathematical/time-series operators.
+            num_alphas: Number of alpha expressions to request.
             near_misses: Optional list of near-miss alpha dictionaries from previous runs.
 
         Returns:
@@ -214,40 +189,34 @@ class LLMClient:
             )
             prompt += (
                 f"\n\nYesterday, these alphas almost passed:\n{miss_lines}\n"
-                "Propose 3 new alphas that mutate these ideas (e.g., change the window, add decay, or change neutralization) to push them over the threshold."
+                "Propose 3 new alphas that mutate these ideas (e.g., change the window, add decay, "
+                "or change neutralization) to push them over the threshold."
             )
 
-        raw_text = self._call_llm(system_prompt=system_prompt, user_prompt=prompt)
-        if isinstance(raw_text, list):
-            return [item if isinstance(item, dict) else {"expression": str(item)} for item in raw_text]
-        if not raw_text:
-            return []
+        parsed = self._call_router(
+            model="proposer-primary",
+            system_prompt=system_prompt,
+            user_prompt=prompt,
+            expect_list=True,
+        )
 
-        try:
-            return self._parse_alphas(raw_text)
-        except Exception as parse_err:
-            log.warning("LLM output invalid JSON on first attempt (%s). Retrying once...", parse_err)
-            # Retry ONCE
-            retry_text = self._call_llm(system_prompt=system_prompt, user_prompt=prompt)
-            if isinstance(retry_text, list):
-                return [item if isinstance(item, dict) else {"expression": str(item)} for item in retry_text]
-            if not retry_text:
-                return []
-            try:
-                return self._parse_alphas(retry_text)
-            except Exception as retry_parse_err:
-                log.error("LLM output invalid JSON on second attempt: %s", retry_parse_err)
-                return []
+        results: list[dict] = []
+        for item in parsed:
+            if isinstance(item, dict):
+                results.append(item)
+            elif isinstance(item, str):
+                results.append({"expression": item})
+        return results
 
     def critique_alphas(self, expressions: list[Any]) -> list[Any]:
-        """Critique and filter candidate alphas using a strict PM persona.
+        """Critique and filter candidate alphas using strict PM persona.
 
         Args:
             expressions: Candidate Fast Expression strings or alpha dicts.
 
         Returns:
             list[Any]: Approved expressions. If rejected, returns empty list.
-                If parsing fails, returns original input expressions (fail-open).
+                If parsing fails, returns original expressions (fail-open).
         """
         if not expressions:
             return []
@@ -259,27 +228,18 @@ class LLMClient:
         )
         user_prompt = json.dumps(expressions)
 
-        try:
-            raw = self._call_llm(system_prompt=system_prompt, user_prompt=user_prompt)
-            if isinstance(raw, dict):
-                data = raw
-            elif isinstance(raw, str):
-                cleaned = _strip_markdown_code_block(raw)
-                data = json.loads(cleaned)
-            else:
-                return expressions
+        data = self._call_router(
+            model="critic-primary",
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            expect_list=False,
+        )
 
-            if not isinstance(data, dict):
-                return expressions
-
+        if isinstance(data, dict):
             decision = str(data.get("decision", "")).strip().upper()
-            critique = str(data.get("critique", "")).strip()
-
             if decision == "REJECT":
+                critique = str(data.get("critique", "")).strip()
                 log.warning("PM Critic rejected alphas: %s", critique)
                 return []
 
-            return expressions
-        except Exception as e:
-            log.warning("Critique failed or returned invalid JSON (%s); failing open.", e)
-            return expressions
+        return expressions

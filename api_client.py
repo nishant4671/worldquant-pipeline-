@@ -30,6 +30,7 @@ from config import (
     TOKEN_REFRESH_MARGIN_SECONDS,
     TOKEN_TTL_SECONDS,
 )
+import notifier
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ class BrainClient:
         self._token: str | None = None
         self._expiry: datetime | None = None  # UTC, timezone-aware
         self._lock: threading.Lock = threading.Lock()
+        self._consecutive_429: int = 0
 
     def _authenticate(self) -> None:
         """Execute authentication request and update cached session token.
@@ -177,6 +179,9 @@ class BrainClient:
                 raise BrainApiError(401, resp.text)
 
         if resp.status_code == 429:
+            self._consecutive_429 += 1
+            if self._consecutive_429 >= 3:
+                notifier.send_system_alert("WorldQuant API Rate Limit hit. Pipeline paused.")
             retry_after = resp.headers.get("Retry-After")
             wait_time: float = 60.0
             if retry_after:
@@ -189,11 +194,15 @@ class BrainClient:
             time.sleep(wait_val)
             resp = self._send_request(method, url, headers=headers, **kwargs)
             if resp.status_code == 429:
+                self._consecutive_429 += 1
+                if self._consecutive_429 >= 3:
+                    notifier.send_system_alert("WorldQuant API Rate Limit hit. Pipeline paused.")
                 raise BrainApiError(429, "Rate limit exceeded")
 
         if not (200 <= resp.status_code < 300):
             raise BrainApiError(resp.status_code, resp.text)
 
+        self._consecutive_429 = 0
         return resp
 
     def invalidate_token(self) -> None:

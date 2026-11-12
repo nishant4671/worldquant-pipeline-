@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+from litellm import Router
 
 # Base paths
 PROJECT_ROOT: Path = Path(__file__).resolve().parent
@@ -62,6 +63,18 @@ MIN_TURNOVER: float = 0.01
 MAX_TURNOVER: float = 0.70
 DB_PATH: Path = PROJECT_ROOT / os.getenv("DB_PATH", "alphas.db")
 TOP_N: int = int(os.getenv("TOP_N", "4"))
+
+MODEL_LIST = [
+    {"model_name": "proposer-primary", "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": os.getenv("GEMINI_API_KEY_1")}},
+    {"model_name": "proposer-fallback", "litellm_params": {"model": "groq/llama-3.3-70b-versatile", "api_key": os.getenv("GROQ_API_KEY")}},
+    {"model_name": "critic-primary", "litellm_params": {"model": "openrouter/qwen/qwen3-coder:free", "api_key": os.getenv("OPENROUTER_API_KEY")}},
+    {"model_name": "critic-fallback", "litellm_params": {"model": "openai/@cf/meta/llama-3.1-8b-instruct", "api_key": os.getenv("CLOUDFLARE_API_TOKEN"), "api_base": f"https://api.cloudflare.com/client/v4/accounts/{os.getenv('CLOUDFLARE_ACCOUNT_ID')}/ai/v1"}}
+]
+FALLBACKS = [
+    {"proposer-primary": ["proposer-fallback"]},
+    {"critic-primary": ["critic-fallback"]}
+]
+ROUTER = Router(model_list=MODEL_LIST, fallbacks=FALLBACKS, num_retries=1, timeout=60, cooldown_time=60)
 
 
 @dataclass(frozen=True)

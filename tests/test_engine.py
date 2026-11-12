@@ -361,6 +361,7 @@ def test_polling_survives_500(mocker, tmp_path):
 def test_circuit_breaker_trips_on_three_429s(mocker):
     """Assert circuit breaker trips to OPEN after 3 consecutive 429 failures and sends alert."""
     mock_alert = mocker.patch("notifier.send_alert")
+    mock_system_alert = mocker.patch("notifier.send_system_alert")
     cb = CircuitBreaker(failure_threshold=3, cooldown_seconds=300)
     assert cb.state == BreakerState.CLOSED
 
@@ -368,15 +369,20 @@ def test_circuit_breaker_trips_on_three_429s(mocker):
     assert cb.state == BreakerState.CLOSED
     assert cb.consecutive_failures == 1
     mock_alert.assert_not_called()
+    mock_system_alert.assert_not_called()
 
     cb.record_failure(429)
     assert cb.state == BreakerState.CLOSED
     assert cb.consecutive_failures == 2
     mock_alert.assert_not_called()
+    mock_system_alert.assert_not_called()
 
     cb.record_failure(429)
     assert cb.state == BreakerState.OPEN
     assert cb.consecutive_failures == 3
+    mock_system_alert.assert_called_once_with(
+        "WorldQuant API Rate Limit hit. Pipeline paused."
+    )
     mock_alert.assert_called_once_with(
         "CIRCUIT BREAKER TRIPPED: 3 consecutive 429s. Halting pipeline."
     )
@@ -389,6 +395,8 @@ def test_circuit_breaker_trips_on_three_429s(mocker):
 
 def test_circuit_breaker_cooldown(mocker):
     """Assert circuit breaker transitions to HALF_OPEN after cooldown period elapses."""
+    mocker.patch("notifier.send_alert")
+    mocker.patch("notifier.send_system_alert")
     cb = CircuitBreaker(failure_threshold=3, cooldown_seconds=300)
     now = 1770000000.0
     mocker.patch("time.time", return_value=now)
@@ -425,6 +433,7 @@ def test_engine_trips_circuit_breaker(mocker, tmp_path):
     """Assert AlphaEngine records 429 failures and trips breaker."""
     db_file = tmp_path / "test_engine_breaker.db"
     mocker.patch("notifier.send_alert")
+    mocker.patch("notifier.send_system_alert")
     mock_client = mocker.MagicMock(spec=BrainClient)
     mock_client.request.side_effect = BrainApiError(429, "Too Many Requests")
 

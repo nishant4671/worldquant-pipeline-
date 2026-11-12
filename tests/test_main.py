@@ -124,3 +124,48 @@ def test_pipeline_logs_critic_rejection_event(mocker):
         for kw in call_kwargs
     )
 
+
+def test_pipeline_llm_outage_sends_system_alert(mocker):
+    """Test that LLMOutageError triggers send_system_alert and terminates pipeline gracefully."""
+    from llm_client import LLMOutageError
+
+    mocker.patch("database.init_db")
+    mocker.patch("database.get_near_misses", return_value=[])
+    mock_system_alert = mocker.patch("notifier.send_system_alert")
+    mocker.patch("llm_client.LLMClient.generate_alphas", side_effect=LLMOutageError("Gemini down"))
+    mocker.patch.object(sys, "argv", ["main.py", "pipeline", "3"])
+
+    exit_code = main.main()
+
+    assert exit_code == 0
+    mock_system_alert.assert_called_once_with(
+        "CRITICAL: All LLM providers are down. Pipeline aborted."
+    )
+
+
+def test_pipeline_zero_yield_sends_system_alert(mocker):
+    """Test that when 0 alphas pass the filters, a zero-yield system alert is sent."""
+    mocker.patch("database.init_db")
+    mocker.patch("database.get_near_misses", return_value=[])
+    mocker.patch("notifier.send_digest", return_value=[])
+    mock_system_alert = mocker.patch("notifier.send_system_alert")
+
+    failed_result = SimulationResult(
+        expression="rank(close)",
+        category="price_volume",
+        alpha_id="alpha-fail-001",
+        status="failed_filters",
+        metrics={"sharpe": 0.5, "fitness": 0.2, "turnover": 0.1},
+    )
+    mocker.patch("engine.AlphaEngine.run_batch", return_value=[failed_result])
+
+    mocker.patch.object(sys, "argv", ["main.py", "pipeline", "3", "--mock"])
+
+    exit_code = main.main()
+
+    assert exit_code == 0
+    mock_system_alert.assert_called_once_with(
+        "Pipeline finished. 0 alphas passed today. Check the dashboard for reasons."
+    )
+
+
