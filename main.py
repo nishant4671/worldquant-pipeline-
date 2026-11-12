@@ -51,9 +51,14 @@ class MockLLMClient:
         sample_fields = ["close", "volume", "open", "high", "low", "returns"]
         return [
             {
-                "hypothesis": f"Momentum on {sample_fields[i % len(sample_fields)]}",
+                "mechanism": f"Structural anomaly on {sample_fields[i % len(sample_fields)]}",
+                "counter_party": "Forced institutional rebalancing",
+                "fields": sample_fields[i % len(sample_fields)],
+                "direction": "Long high rank, short low rank",
+                "turnover_control": "Decay 10 days",
+                "failure_mode": "High volatility regime shift",
                 "expression": f"rank({sample_fields[i % len(sample_fields)]})",
-                "expected_turnover": "low",
+                "hypothesis": f"Momentum on {sample_fields[i % len(sample_fields)]}",
             }
             for i in range(num_alphas)
         ]
@@ -255,7 +260,19 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
             hypothesis = (
                 alpha.get("hypothesis", "N/A") if isinstance(alpha, dict) else "N/A"
             )
-            log.info("Simulating: %s (Hypothesis: %s)", expr, hypothesis)
+            mechanism = (
+                alpha.get("mechanism", "N/A") if isinstance(alpha, dict) else "N/A"
+            )
+            counter_party = (
+                alpha.get("counter_party", "N/A") if isinstance(alpha, dict) else "N/A"
+            )
+            log.info(
+                "Simulating: %s (Hypothesis: %s | Mechanism: %s | Counter-Party: %s)",
+                expr,
+                hypothesis,
+                mechanism,
+                counter_party,
+            )
 
         pairs = [
             (

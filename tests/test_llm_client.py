@@ -157,4 +157,6 @@ def test_proposer_prompt_forces_cross_category(mocker):
     messages = call_kwargs["messages"]
     system_msg = next(m["content"] for m in messages if m["role"] == "system")
     assert "You MUST combine at least one Price-Volume field" in system_msg
+    assert "counter_party" in system_msg
+    assert "failure_mode" in system_msg
 
