@@ -185,7 +185,8 @@ class LLMClient:
             "'turnover_control': 'How does the alpha avoid excessive turnover (e.g., decay, trade_when)?', "
             "'failure_mode': 'Under what market conditions will this alpha fail?', "
             "'expression': 'The FASTEXPR code'}. "
-            "You MUST combine at least one Price-Volume field with one of the new Analyst, Options, or Short Interest fields to create cross-category alphas. Do not propose alphas using only price and volume. Use fields like est_eps_revision, iv_skew, short_interest_ratio, and operating_cash_flow alongside price-volume metrics."
+            "You MUST combine at least one Price-Volume field with one of the new Analyst, Options, or Short Interest fields to create cross-category alphas. Do not propose alphas using only price and volume. Use fields like est_eps_revision, iv_skew, short_interest_ratio, and operating_cash_flow alongside price-volume metrics. "
+            "EVENT-SPARSE REQUIREMENT: At least 30% of the generated alphas MUST be 'event-sparse'. Instead of holding a position every day, you must use trade_when to activate only during specific events (e.g., earnings windows, abnormal volume spikes, or extreme volatility). Example: trade_when(ts_zscore(volume, 60) > 1.5, group_neutralize(ts_decay_linear(rank(ts_delta(est_eps_revision, 5)), 10), industry), -1). Holding a position only during events drastically reduces correlation with the crowd."
         )
         prompt = f"Propose {num_alphas} unique Fast Expression alphas following the system instructions."
 

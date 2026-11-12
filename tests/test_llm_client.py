@@ -159,6 +159,8 @@ def test_proposer_prompt_forces_cross_category(mocker):
     assert "You MUST combine at least one Price-Volume field" in system_msg
     assert "counter_party" in system_msg
     assert "failure_mode" in system_msg
+    assert "EVENT-SPARSE REQUIREMENT" in system_msg
+    assert "trade_when" in system_msg
 
 
 def test_critic_rejects_inverted_sign(mocker):
