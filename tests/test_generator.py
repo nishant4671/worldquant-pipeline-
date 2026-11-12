@@ -152,3 +152,12 @@ def test_no_print_statements():
     generator_path = Path(__file__).resolve().parent.parent / "generator.py"
     content = generator_path.read_text(encoding="utf-8")
     assert "print(" not in content
+
+
+def test_new_categories_in_generator():
+    """Assert options and short_positioning exist in KNOWN_FIELDS and expression generation works."""
+    assert "options" in KNOWN_FIELDS
+    assert "short_positioning" in KNOWN_FIELDS
+    out = generate_expressions(n=10, seed=42)
+    assert len(out) == 10
+

@@ -37,6 +37,7 @@ KNOWN_FIELDS: dict[str, list[str]] = {
         "debt",  # confidence: medium
         "ebit",  # confidence: medium
         "eps",  # confidence: medium
+        "operating_cash_flow",  # confidence: medium
     ],
     "analyst": [
         "target_price",  # confidence: medium
@@ -45,6 +46,22 @@ KNOWN_FIELDS: dict[str, list[str]] = {
         "rec_mean",  # confidence: medium
         "rec_buy",  # confidence: medium
         "rec_sell",  # confidence: medium
+        "est_eps_mean",  # confidence: medium
+        "est_eps_revision",  # confidence: medium
+        "est_sales_mean",  # confidence: medium
+        "est_dispersion",  # confidence: medium
+        "analyst_coverage",  # confidence: medium
+    ],
+    "options": [
+        "iv_call_30",  # confidence: medium
+        "iv_put_30",  # confidence: medium
+        "iv_skew",  # confidence: medium
+        "option_volume",  # confidence: medium
+    ],
+    "short_positioning": [
+        "short_interest_ratio",  # confidence: medium
+        "days_to_cover",  # confidence: medium
+        "institutional_ownership",  # confidence: medium
     ],
 }
 
@@ -73,49 +90,57 @@ UNVERIFIED_FIELDS: dict[str, list[str]] = {
     ],
 }
 
+ALL_CATEGORIES: list[str] = [
+    "price_volume",
+    "fundamental",
+    "analyst",
+    "options",
+    "short_positioning",
+]
+
 # Template families for Fast Expression generation.
 TEMPLATES: list[dict[str, Any]] = [
     {
         "name": "rank",
         "build": lambda fields, n: f"rank({fields[0]})",
         "arity": 1,
-        "applies_to": ["price_volume", "fundamental", "analyst"],
+        "applies_to": ALL_CATEGORIES,
     },
     {
         "name": "ts_rank",
         "build": lambda fields, n: f"ts_rank({fields[0]}, {n})",
         "arity": 1,
-        "applies_to": ["price_volume", "fundamental", "analyst"],
+        "applies_to": ALL_CATEGORIES,
     },
     {
         "name": "ts_delta",
         "build": lambda fields, n: f"-ts_delta({fields[0]}, {n})",
         "arity": 1,
-        "applies_to": ["price_volume", "fundamental", "analyst"],
+        "applies_to": ALL_CATEGORIES,
     },
     {
         "name": "ts_zscore",
         "build": lambda fields, n: f"ts_zscore({fields[0]}, {n})",  # verify: Fast Expression function name
         "arity": 1,
-        "applies_to": ["price_volume", "fundamental", "analyst"],
+        "applies_to": ALL_CATEGORIES,
     },
     {
         "name": "ts_mean",
         "build": lambda fields, n: f"ts_mean({fields[0]}, {n})",
         "arity": 1,
-        "applies_to": ["price_volume", "fundamental", "analyst"],
+        "applies_to": ALL_CATEGORIES,
     },
     {
         "name": "group_rank",
         "build": lambda fields, n: f"group_rank({fields[0]}, sector)",
         "arity": 1,
-        "applies_to": ["price_volume", "fundamental", "analyst"],
+        "applies_to": ALL_CATEGORIES,
     },
     {
         "name": "ratio_pair",
         "build": lambda fields, n: f"{fields[0]} / ({fields[1]} + 1e-9)",
         "arity": 2,
-        "applies_to": ["price_volume", "fundamental", "analyst"],
+        "applies_to": ALL_CATEGORIES,
     },
 ]
 

@@ -99,3 +99,11 @@ def test_math_constants_allowed():
     valid, reason = validate_expression("sales / (debt + 1e-9)")
     assert valid is True
     assert reason == ""
+
+
+def test_new_fields_valid():
+    """Assert newly expanded whitelist fields pass static validation."""
+    assert validate_expression("rank(est_dispersion)") == (True, "")
+    assert validate_expression("rank(iv_skew)") == (True, "")
+    assert validate_expression("rank(short_interest_ratio)") == (True, "")
+
