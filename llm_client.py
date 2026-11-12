@@ -191,14 +191,26 @@ class LLMClient:
         prompt = f"Propose {num_alphas} unique Fast Expression alphas following the system instructions."
 
         if near_misses:
-            miss_lines = "\n".join(
-                f"- {item.get('expression', str(item)) if isinstance(item, dict) else str(item)}"
-                for item in near_misses
-            )
+            miss_lines_list: list[str] = []
+            for item in near_misses:
+                if isinstance(item, dict):
+                    expr = item.get("expression", str(item))
+                    genome = item.get("genome")
+                    if isinstance(genome, dict):
+                        miss_lines_list.append(
+                            f"- Expression: {expr} | Genome: fields={genome.get('fields')}, window={genome.get('window')}, neutralization={genome.get('neutralization')}, event_condition={genome.get('event_condition')}"
+                        )
+                    else:
+                        miss_lines_list.append(f"- {expr}")
+                else:
+                    miss_lines_list.append(f"- {item}")
+            miss_lines = "\n".join(miss_lines_list)
             prompt += (
                 f"\n\nYesterday, these alphas almost passed:\n{miss_lines}\n"
-                "Propose 3 new alphas that mutate these ideas (e.g., change the window, add decay, "
-                "or change neutralization) to push them over the threshold."
+                "Propose 3 new alphas that mutate these ideas. Specifically, look at the Genome parameters "
+                "(e.g., window size, neutralization type, or event conditions) and change them "
+                "(e.g., change a 20-day window to 60 days, or switch from industry to subindustry neutralization) "
+                "to push them over the threshold."
             )
 
         parsed = self._call_router(
