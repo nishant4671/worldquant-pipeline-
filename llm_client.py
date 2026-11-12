@@ -178,7 +178,8 @@ class LLMClient:
             "Combine Price-Volume with Fundamental data. Use operators like ts_decay_linear, group_neutralize, "
             "trade_when, ts_zscore. Every alpha must have a clear economic hypothesis. Reject textbook formulas. "
             "Output a strict JSON array where each object contains: "
-            "{'hypothesis': '...', 'expression': '...', 'expected_turnover': 'low/medium/high'}."
+            "{'hypothesis': '...', 'expression': '...', 'expected_turnover': 'low/medium/high'}. "
+            "You MUST combine at least one Price-Volume field with one of the new Analyst, Options, or Short Interest fields to create cross-category alphas. Do not propose alphas using only price and volume. Use fields like est_eps_revision, iv_skew, short_interest_ratio, and operating_cash_flow alongside price-volume metrics."
         )
         prompt = f"Propose {num_alphas} unique Fast Expression alphas following the system instructions."
 

@@ -140,3 +140,21 @@ def test_prompt_includes_near_misses(mocker):
     assert "Yesterday, these alphas almost passed:" in user_msg
     assert "rank(close - open)" in user_msg
     assert "ts_rank(sales, 60)" in user_msg
+
+
+def test_proposer_prompt_forces_cross_category(mocker):
+    """Test that generate_alphas enforces cross-category field combination in system prompt."""
+    mock_router = mocker.MagicMock(spec=Router)
+    mock_resp = mocker.MagicMock()
+    mock_resp.choices = [mocker.MagicMock()]
+    mock_resp.choices[0].message.content = '[{"expression": "rank(close)"}]'
+    mock_router.completion.return_value = mock_resp
+
+    client = LLMClient(router=mock_router)
+    client.generate_alphas(known_fields={"price_volume": ["close"]})
+
+    call_kwargs = mock_router.completion.call_args.kwargs
+    messages = call_kwargs["messages"]
+    system_msg = next(m["content"] for m in messages if m["role"] == "system")
+    assert "You MUST combine at least one Price-Volume field" in system_msg
+
