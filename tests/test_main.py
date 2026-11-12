@@ -1,5 +1,6 @@
 """Unit tests for main CLI orchestrator module."""
 
+import argparse
 import sys
 import pytest
 
@@ -167,5 +168,28 @@ def test_pipeline_zero_yield_sends_system_alert(mocker):
     mock_system_alert.assert_called_once_with(
         "Pipeline finished. 0 alphas passed today. Check the dashboard for reasons."
     )
+
+
+def test_screen_fields_command(mocker, capsys):
+    """Test screen_fields command executes simulation and prints formatted output."""
+    mocker.patch("database.init_db")
+    fake_result = SimulationResult(
+        expression="group_neutralize(ts_zscore(iv_skew, 60), industry)",
+        category="screener_test",
+        alpha_id="alpha-mock-001",
+        status="passed",
+        metrics={"sharpe": 1.5, "fitness": 1.2, "turnover": 0.2},
+    )
+    mocker.patch("engine.AlphaEngine.run_batch", return_value=[fake_result])
+
+    args = argparse.Namespace(fields=["iv_skew", "est_eps_revision"], mock=True)
+    main._cmd_screen_fields(args)
+
+    captured = capsys.readouterr().out
+    assert "iv_skew" in captured
+    assert "est_eps_revision" in captured
+    assert "1.50" in captured
+    assert "1.20" in captured
+
 
 

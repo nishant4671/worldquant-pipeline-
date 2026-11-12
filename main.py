@@ -16,6 +16,9 @@ from api_client import BrainApiError, BrainClient
 from config import TELEGRAM_CHAT_ID, settings
 import database
 from engine import AlphaEngine, FakeClient, SimulationResult
+
+# Alias for mock simulation client
+MockBrainClient = FakeClient
 from generator import KNOWN_FIELDS, generate_expressions
 from llm_client import AllProvidersFailedException, LLMClient, LLMOutageError
 import notifier
@@ -289,6 +292,46 @@ def _cmd_pipeline(args: argparse.Namespace) -> None:
         return
 
 
+def _cmd_screen_fields(args: argparse.Namespace) -> None:
+    """Screen individual fields for standalone alpha predictive power."""
+    log.info("Step 1: Initializing database for field screener...")
+    database.init_db()
+
+    client = FakeClient() if getattr(args, "mock", False) else BrainClient()
+    engine = AlphaEngine(client=client)
+
+    pairs: list[tuple[str, str]] = []
+    for field in args.fields:
+        expr = f"group_neutralize(ts_zscore({field}, 60), industry)"
+        log.info("Screening field '%s': %s", field, expr)
+        pairs.append((expr, "screener_test"))
+
+    log.info("Simulating %d screening expressions (mock=%s)...", len(pairs), getattr(args, "mock", False))
+    results = engine.run_batch(pairs)
+
+    results_by_expr = {res.expression: res for res in results}
+
+    print("-" * 55)
+    print(f"{'Field':20s} | {'Sharpe':8s} | {'Fitness':8s}")
+    print("-" * 55)
+    for i, field in enumerate(args.fields):
+        expr = f"group_neutralize(ts_zscore({field}, 60), industry)"
+        res = results_by_expr.get(expr)
+        if res is None and results:
+            if i < len(results):
+                res = results[i]
+            else:
+                res = results[0]
+
+        if res and res.status in ("passed", "failed_filters") and res.metrics:
+            sharpe = float(res.metrics.get("sharpe", 0.0) or 0.0)
+            fitness = float(res.metrics.get("fitness", 0.0) or 0.0)
+            print(f"{field:20s} | Sharpe: {sharpe:6.2f} | Fitness: {fitness:6.2f}")
+        else:
+            print(f"{field:20s} | FAILED")
+    print("-" * 55)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build command-line parser with shared logging options and subcommands."""
     common_parser = argparse.ArgumentParser(add_help=False)
@@ -335,6 +378,16 @@ def _build_parser() -> argparse.ArgumentParser:
     pipe_p.add_argument("n", type=int, help="Number of expressions to generate and simulate")
     pipe_p.add_argument("--mock", action="store_true", help="Run with mock client")
     pipe_p.set_defaults(func=_cmd_pipeline)
+
+    # screen_fields field1 [field2 ...] --mock
+    screen_p = subparsers.add_parser(
+        "screen_fields",
+        parents=[common_parser],
+        help="Screen individual fields for standalone alpha predictive power",
+    )
+    screen_p.add_argument("fields", nargs="+", help="Field names to screen")
+    screen_p.add_argument("--mock", action="store_true", help="Run with mock client")
+    screen_p.set_defaults(func=_cmd_screen_fields)
 
     return parser
 
