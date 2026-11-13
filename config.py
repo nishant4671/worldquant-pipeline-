@@ -54,7 +54,7 @@ GEMINI_API_KEYS: list[str] = _load_gemini_api_keys()
 BRAIN_BASE_URL: str = "https://api.worldquantbrain.com"
 TOKEN_TTL_SECONDS: int = 14400
 TOKEN_REFRESH_MARGIN_SECONDS: int = 300
-MAX_CONCURRENT_SIMULATIONS: int = 3
+MAX_CONCURRENT_SIMULATIONS: int = 1
 POLL_INTERVAL_SECONDS: int = 5
 POLL_TIMEOUT_SECONDS: int = 1800
 MIN_SHARPE: float = 1.25
@@ -65,16 +65,37 @@ DB_PATH: Path = PROJECT_ROOT / os.getenv("DB_PATH", "alphas.db")
 TOP_N: int = int(os.getenv("TOP_N", "4"))
 
 MODEL_LIST = [
-    {"model_name": "proposer-primary", "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": os.getenv("GEMINI_API_KEY_1")}},
-    {"model_name": "proposer-fallback", "litellm_params": {"model": "groq/llama-3.3-70b-versatile", "api_key": os.getenv("GROQ_API_KEY")}},
-    {"model_name": "critic-primary", "litellm_params": {"model": "openrouter/qwen/qwen3-coder:free", "api_key": os.getenv("OPENROUTER_API_KEY")}},
-    {"model_name": "critic-fallback", "litellm_params": {"model": "openai/@cf/meta/llama-3.1-8b-instruct", "api_key": os.getenv("CLOUDFLARE_API_TOKEN"), "api_base": f"https://api.cloudflare.com/client/v4/accounts/{os.getenv('CLOUDFLARE_ACCOUNT_ID')}/ai/v1"}}
+    {
+        "model_name": "proposer-primary",
+        "litellm_params": {
+            "model": "ollama_chat/nemotron-3-nano:4b",
+            "api_base": "http://localhost:11434",
+        },
+    },
+    {
+        "model_name": "ollama_chat/nemotron-3-nano:4b",
+        "litellm_params": {
+            "model": "ollama_chat/nemotron-3-nano:4b",
+            "api_base": "http://localhost:11434",
+        },
+    },
+    {
+        "model_name": "critic-primary",
+        "litellm_params": {
+            "model": "ollama_chat/phi4-mini",
+            "api_base": "http://localhost:11434",
+        },
+    },
+    {
+        "model_name": "ollama_chat/phi4-mini",
+        "litellm_params": {
+            "model": "ollama_chat/phi4-mini",
+            "api_base": "http://localhost:11434",
+        },
+    },
 ]
-FALLBACKS = [
-    {"proposer-primary": ["proposer-fallback"]},
-    {"critic-primary": ["critic-fallback"]}
-]
-ROUTER = Router(model_list=MODEL_LIST, fallbacks=FALLBACKS, num_retries=1, timeout=60, cooldown_time=60)
+FALLBACKS = []
+ROUTER = Router(model_list=MODEL_LIST, fallbacks=FALLBACKS, num_retries=1, timeout=300, cooldown_time=60)
 
 
 @dataclass(frozen=True)

@@ -113,7 +113,7 @@ class AlphaEngine:
     def __init__(
         self,
         client: BrainClient,
-        max_workers: int = 3,
+        max_workers: int = 1,
         poll_interval: float | None = None,
         poll_timeout: float | None = None,
         db_path: Path | str | None = None,
@@ -123,7 +123,7 @@ class AlphaEngine:
 
         Args:
             client: BrainClient instance for communicating with BRAIN API.
-            max_workers: Max concurrent simulation threads (default 3).
+            max_workers: Max concurrent simulation threads (default 1).
             poll_interval: Polling interval in seconds (default from settings).
             poll_timeout: Max polling timeout in seconds (default from settings).
             db_path: Optional path to SQLite database. If None, uses default.

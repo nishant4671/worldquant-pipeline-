@@ -19,9 +19,52 @@ from litellm.exceptions import (
     Timeout,
 )
 
-from config import ROUTER
+from config import ROUTER as CONFIG_ROUTER
 
 log = logging.getLogger(__name__)
+
+OLLAMA_API_BASE: str = "http://localhost:11434"
+PROPOSER_MODEL: str = "ollama_chat/nemotron-3-nano:4b"
+CRITIC_MODEL: str = "ollama_chat/phi4-mini"
+
+MODEL_LIST: list[dict[str, Any]] = [
+    {
+        "model_name": "proposer-primary",
+        "litellm_params": {
+            "model": PROPOSER_MODEL,
+            "api_base": OLLAMA_API_BASE,
+        },
+    },
+    {
+        "model_name": PROPOSER_MODEL,
+        "litellm_params": {
+            "model": PROPOSER_MODEL,
+            "api_base": OLLAMA_API_BASE,
+        },
+    },
+    {
+        "model_name": "critic-primary",
+        "litellm_params": {
+            "model": CRITIC_MODEL,
+            "api_base": OLLAMA_API_BASE,
+        },
+    },
+    {
+        "model_name": CRITIC_MODEL,
+        "litellm_params": {
+            "model": CRITIC_MODEL,
+            "api_base": OLLAMA_API_BASE,
+        },
+    },
+]
+
+ROUTER: Router = Router(
+    model_list=MODEL_LIST,
+    fallbacks=[],
+    num_retries=1,
+    timeout=300,
+    cooldown_time=60,
+)
 
 DEFAULT_OPERATORS: list[str] = [
     "rank",

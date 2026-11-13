@@ -368,12 +368,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # generate N
     gen_p = subparsers.add_parser("generate", parents=[common_parser], help="Generate N expressions")
-    gen_p.add_argument("n", type=int, help="Number of expressions to generate")
+    gen_p.add_argument("n", type=int, nargs="?", default=3, help="Number of expressions to generate (default: 3)")
     gen_p.set_defaults(func=_cmd_generate)
 
     # simulate N --mock
     sim_p = subparsers.add_parser("simulate", parents=[common_parser], help="Simulate N expressions")
-    sim_p.add_argument("n", type=int, help="Number of expressions to simulate")
+    sim_p.add_argument("n", type=int, nargs="?", default=3, help="Number of expressions to simulate (default: 3)")
     sim_p.add_argument("--mock", action="store_true", help="Run with mock client")
     sim_p.set_defaults(func=_cmd_simulate)
 
@@ -392,7 +392,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # pipeline N --mock
     pipe_p = subparsers.add_parser("pipeline", parents=[common_parser], help="Run full pipeline")
-    pipe_p.add_argument("n", type=int, help="Number of expressions to generate and simulate")
+    pipe_p.add_argument("n", type=int, nargs="?", default=3, help="Number of expressions to generate and simulate (default: 3)")
     pipe_p.add_argument("--mock", action="store_true", help="Run with mock client")
     pipe_p.set_defaults(func=_cmd_pipeline)
 
