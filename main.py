@@ -392,7 +392,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # pipeline N --mock
     pipe_p = subparsers.add_parser("pipeline", parents=[common_parser], help="Run full pipeline")
-    pipe_p.add_argument("n", type=int, nargs="?", default=3, help="Number of expressions to generate and simulate (default: 3)")
+    pipe_p.add_argument("n", type=int, nargs="?", default=1, help="Number of expressions to generate and simulate (default: 1)")
     pipe_p.add_argument("--mock", action="store_true", help="Run with mock client")
     pipe_p.set_defaults(func=_cmd_pipeline)
 

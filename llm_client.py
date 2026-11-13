@@ -62,7 +62,7 @@ ROUTER: Router = Router(
     model_list=MODEL_LIST,
     fallbacks=[],
     num_retries=1,
-    timeout=300,
+    timeout=1200,
     cooldown_time=60,
 )
 
@@ -231,7 +231,7 @@ class LLMClient:
             "You MUST combine at least one Price-Volume field with one of the new Analyst, Options, or Short Interest fields to create cross-category alphas. Do not propose alphas using only price and volume. Use fields like est_eps_revision, iv_skew, short_interest_ratio, and operating_cash_flow alongside price-volume metrics. "
             "EVENT-SPARSE REQUIREMENT: At least 30% of the generated alphas MUST be 'event-sparse'. Instead of holding a position every day, you must use trade_when to activate only during specific events (e.g., earnings windows, abnormal volume spikes, or extreme volatility). Example: trade_when(ts_zscore(volume, 60) > 1.5, group_neutralize(ts_decay_linear(rank(ts_delta(est_eps_revision, 5)), 10), industry), -1). Holding a position only during events drastically reduces correlation with the crowd."
         )
-        prompt = f"Propose {num_alphas} unique Fast Expression alphas following the system instructions."
+        prompt = "Propose exactly 1 unique Fast Expression alpha following the system instructions."
 
         if near_misses:
             miss_lines_list: list[str] = []

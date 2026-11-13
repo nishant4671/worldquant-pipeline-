@@ -95,7 +95,7 @@ MODEL_LIST = [
     },
 ]
 FALLBACKS = []
-ROUTER = Router(model_list=MODEL_LIST, fallbacks=FALLBACKS, num_retries=1, timeout=300, cooldown_time=60)
+ROUTER = Router(model_list=MODEL_LIST, fallbacks=FALLBACKS, num_retries=1, timeout=1200, cooldown_time=60)
 
 
 @dataclass(frozen=True)
