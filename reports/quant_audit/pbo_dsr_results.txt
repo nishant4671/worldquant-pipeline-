@@ -1,0 +1,36 @@
+================================================================
+             WORLDQUANT BRAIN QUANTITATIVE AUDIT
+     Deflated Sharpe Ratio (DSR) & Backtest Overfitting (PBO)
+================================================================
+Analyzed Dataset:       reports\quant_audit\trial_history.csv
+Total Alpha Trials:     5
+Historical Dates (T):   1236
+Candidate Alphas:       1YWq0A0z, A1VAGjjY, A1xRE8zR, Grmq9j8G, gJaY0kqM
+
+----------------------------------------------------------------
+1. DEFLATED SHARPE RATIO (DSR) AUDIT
+----------------------------------------------------------------
+Best Performing Alpha:  gJaY0kqM
+Daily Sharpe Ratio:     -0.2769
+Annualized Sharpe (IS): -4.3961
+Variance of Trial SRs:  0.279725
+Expected Max SR (SR0):  +0.6308
+Return Skewness:        -0.3160
+Return Kurtosis (raw):  2.7862
+Estimation Std (sigma): 0.027687
+Deflated Sharpe Ratio:  0.0000 (0.00%)
+
+Interpretation:
+  * DSR < 0.95 indicates the observed Sharpe is likely a product of data snooping.
+
+----------------------------------------------------------------
+2. PROBABILITY OF BACKTEST OVERFITTING (PBO) AUDIT
+----------------------------------------------------------------
+Partition Slices (S):   16
+Total CSCV Splits:      12,870
+Overfit Splits Count:   27
+PBO (Probability):      0.0021 (0.21%)
+
+Interpretation:
+  * PBO < 0.20 indicates robust out-of-sample persistence (low overfitting risk).
+================================================================

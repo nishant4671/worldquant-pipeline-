@@ -1,0 +1,21 @@
+============================================================
+           ALPHA SELF-CORRELATION MATRIX (PEARSON)
+============================================================
+Input Dataset: reports\quant_audit\trial_history.csv
+Total Alphas:  5
+
+Correlation Matrix (Rounded to 2 decimals):
+          1YWq0A0z  A1VAGjjY  A1xRE8zR  Grmq9j8G  gJaY0kqM
+1YWq0A0z      1.00     -0.13      0.88      0.88     -0.46
+A1VAGjjY     -0.13      1.00     -0.38      0.30      0.90
+A1xRE8zR      0.88     -0.38      1.00      0.63     -0.63
+Grmq9j8G      0.88      0.30      0.63      1.00     -0.06
+gJaY0kqM     -0.46      0.90     -0.63     -0.06      1.00
+
+------------------------------------------------------------
+Correlation Check (> 0.70):
+WARNING: Found 3 pair(s) with correlation > 0.70:
+  * 1YWq0A0z <-> A1xRE8zR: 0.88
+  * 1YWq0A0z <-> Grmq9j8G: 0.88
+  * A1VAGjjY <-> gJaY0kqM: 0.90
+============================================================
